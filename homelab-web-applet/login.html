@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Screwhead Networks -- Login</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="frame">
+
+  <!-- ================= site header ================= -->
+  <div class="siteheader">
+    <svg class="javalogo" viewBox="0 0 32 32" shape-rendering="crispEdges" role="img" aria-label="Java">
+      <path d="M12 3q3 3 0 6t0 5" fill="none" stroke="#800000" stroke-width="2"/>
+      <path d="M19 4q3 3 0 6t0 4" fill="none" stroke="#800000" stroke-width="2"/>
+      <path d="M7 16h16v6q0 4-4 4h-8q-4 0-4-4z" fill="#000080" stroke="#000000" stroke-width="1.5"/>
+      <path d="M23 17q5 0 5 3.5T23 24" fill="none" stroke="#000000" stroke-width="2"/>
+      <rect x="5" y="27" width="21" height="3" fill="#000000"/>
+    </svg>
+    <div class="brand">
+      <span class="brand-name">SCREWHEAD NETWORKS</span>
+      <span class="brand-sub">powered by java &middot; est. 1999</span>
+    </div>
+    <span class="badge">public web server</span>
+  </div>
+
+  <!-- ================= title bar ================= -->
+  <div class="titlebar">
+    <div class="title-menu"></div>
+    <div class="title-text">Screwhead Networks &mdash; <span class="host">Login</span> &mdash; dtwm</div>
+    <div class="title-buttons"><span class="min"></span><span class="max"></span></div>
+  </div>
+
+  <!-- ================= navigation ================= -->
+  <ul class="menubar">
+    <li><a href="index.html">Home</a></li>
+    <li><a href="peering.html">Peering</a></li>
+    <li><a href="layout.html">Layout</a></li>
+    <li><a href="server-info.html">Server Info</a></li>
+    <li class="right cur"><a href="login.html">Login</a></li>
+  </ul>
+
+  <!-- ================= tool bar ================= -->
+  <div class="toolbar">
+    <button class="tool" type="button">&lt;&lt; Back</button>
+    <button class="tool" type="button">Forward &gt;&gt;</button>
+    <button class="tool" type="button">Reload</button>
+    <span class="sep"></span>
+    <div class="location">http://www.screwheadnetworks.com/login.html</div>
+  </div>
+
+  <!-- ================= page body ================= -->
+  <div class="main">
+
+    <div class="logindialog">
+      <div class="dialog-title">Screwhead Networks &mdash; Authentication</div>
+      <!-- Username and password only. The page says nothing about how access is
+           actually granted: naming the mechanism just tells someone what to go
+           after. The gate itself lives in the web server. -->
+      <form id="loginform" autocomplete="off">
+        <div class="loginrow">
+          <label for="username">Username:</label>
+          <input type="text" id="username" name="username" autocomplete="off" spellcheck="false">
+        </div>
+
+        <div class="loginrow">
+          <label for="password">Password:</label>
+          <input type="password" id="password" name="password" autocomplete="off">
+        </div>
+
+        <div class="loginbuttons">
+          <button class="loginbtn" type="submit">Login</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ================= status bar ================= -->
+  <div class="statusbar">
+    <span id="status-msg">Ready.</span>
+    <span>Screwhead Networks</span>
+    <span id="status-clock">--:--:--</span>
+  </div>
+
+</div><!-- /frame -->
+
+<!-- ================= site footer ================= -->
+<div class="sitefooter">
+  <span>Screwhead Networks &copy; 1999</span>
+  <span>github: <a class="link90s" href="https://github.com/prestonbalthaus-lgtm">https://github.com/prestonbalthaus-lgtm</a></span>
+</div>
+
+<script src="site.js"></script>
+
+</body>
+</html>

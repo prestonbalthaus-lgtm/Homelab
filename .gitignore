@@ -1,0 +1,43 @@
+# Repository-wide ignores for the homelab.
+#
+# The secrets block is the important part: it is a safety net for every folder
+# in here, not just one project. Nothing in this list should ever be committed.
+
+# --- secrets and key material --------------------------------------------
+# A CA key is the whole ballgame: anyone holding a copy can issue themselves a
+# certificate for anything it signs.
+.env
+.env.*
+!*.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.csr
+*.srl
+secrets/
+*_rsa
+*_ed25519
+known_hosts
+authorized_keys
+
+# --- build output ---------------------------------------------------------
+build/
+*.class
+.jdk/
+
+# --- python ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# --- editor and OS junk ---------------------------------------------------
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
