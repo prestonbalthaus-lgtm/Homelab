@@ -1,0 +1,18 @@
+{
+  "nodes": [
+    {"id": "core", "name": "FEED-CORE-01", "role": "from grafana", "detail": "live feed"},
+    {"id": "edge", "name": "FEED-EDGE-02", "role": "from grafana", "detail": "live feed"},
+    {"id": "lab",  "name": "FEED-LAB-03",  "role": "from grafana", "detail": "live feed"},
+    {"id": "inet", "name": "FEED-INTERNET", "role": "from grafana", "detail": "live feed"}
+  ],
+  "links": [
+    {"from": "core", "to": "edge", "kbps": 111.1},
+    {"from": "edge", "to": "core", "kbps": 222.2},
+    {"from": "edge", "to": "lab",  "kbps": 333.3},
+    {"from": "lab",  "to": "edge", "kbps": 444.4},
+    {"from": "lab",  "to": "core", "kbps": 555.5},
+    {"from": "core", "to": "lab",  "kbps": 666.6},
+    {"from": "edge", "to": "inet", "kbps": 777.7},
+    {"from": "inet", "to": "edge", "kbps": 888.8}
+  ]
+}

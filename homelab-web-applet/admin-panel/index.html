@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Screwhead Networks -- Admin Panel</title>
+<link rel="stylesheet" href="../style.css">
+<script src="https://cjrtnc.leaningtech.com/4.3/loader.js"></script>
+</head>
+<body class="wide">
+
+<div class="frame">
+
+  <!-- ================= site header ================= -->
+  <div class="siteheader">
+    <svg class="javalogo" viewBox="0 0 32 32" shape-rendering="crispEdges" role="img" aria-label="Java">
+      <path d="M12 3q3 3 0 6t0 5" fill="none" stroke="#800000" stroke-width="2"/>
+      <path d="M19 4q3 3 0 6t0 4" fill="none" stroke="#800000" stroke-width="2"/>
+      <path d="M7 16h16v6q0 4-4 4h-8q-4 0-4-4z" fill="#000080" stroke="#000000" stroke-width="1.5"/>
+      <path d="M23 17q5 0 5 3.5T23 24" fill="none" stroke="#000000" stroke-width="2"/>
+      <rect x="5" y="27" width="21" height="3" fill="#000000"/>
+    </svg>
+    <div class="brand">
+      <span class="brand-name">SCREWHEAD NETWORKS</span>
+      <span class="brand-sub">powered by java &middot; est. 1999</span>
+    </div>
+    <span class="badge">ADMIN PANEL &mdash; not linked from the public site</span>
+  </div>
+
+  <!-- ================= title bar ================= -->
+  <div class="titlebar">
+    <div class="title-menu"></div>
+    <div class="title-text">Control Panel &mdash; <span class="host">homelab.local</span> &mdash; dtwm</div>
+    <div class="title-buttons"><span class="min"></span><span class="max"></span></div>
+  </div>
+
+  <!-- ================= navigation ================= -->
+  <ul class="menubar">
+    <li><a href="../index.html">Home</a></li>
+    <li><a href="../peering.html">Peering</a></li>
+    <li><a href="../layout.html">Layout</a></li>
+    <li><a href="../server-info.html">Server Info</a></li>
+    <li class="right"><a href="../login.html">Login</a></li>
+  </ul>
+
+  <!-- ================= tool bar ================= -->
+  <div class="toolbar">
+    <button class="tool" type="button">&lt;&lt; Back</button>
+    <button class="tool" type="button">Forward &gt;&gt;</button>
+    <button class="tool" type="button">Reload</button>
+    <span class="sep"></span>
+    <div class="location">http://homelab.local/admin-panel/index.html</div>
+  </div>
+
+  <!-- ================= workspace ================= -->
+  <div class="workspace">
+
+    <!-- ---------- sidebar ---------- -->
+    <div class="pane">
+      <div class="pane-title">HOSTS</div>
+      <ul class="listbox">
+        <li class="sel">pve01</li>
+        <li>vault01</li>
+        <li>nas00</li>
+        <li>dns00</li>
+        <li>k3s-w01</li>
+        <li>k3s-w02</li>
+        <li>backup01</li>
+      </ul>
+
+      <div class="kv">
+        <div><span>uptime</span><b>41d 06h</b></div>
+        <div><span>load</span><b>0.14 0.09 0.07</b></div>
+        <div><span>kernel</span><b>6.8.4-lts</b></div>
+        <div><span>mem</span><b>11.2/32G</b></div>
+        <div><span>pool</span><b>7.4/16T</b></div>
+        <div><span>net</span><b>1.2 Mb/s</b></div>
+      </div>
+
+      <div class="pane-title" style="margin-top:4px">DOCS</div>
+      <ul class="listbox">
+        <li>00-network.md</li>
+        <li>10-proxmox.md</li>
+        <li>20-storage.md</li>
+        <li>30-backups.md</li>
+        <li>40-vault.md</li>
+      </ul>
+    </div>
+
+    <!-- ---------- main column ---------- -->
+    <div class="main">
+
+      <!-- the applet -->
+      <div class="section">
+        <h2>Console Applet &mdash; homelab.HelloApplet</h2>
+        <div class="applet-host">
+          <applet archive="../HelloApplet.jar"
+                  code="homelab.HelloApplet"
+                  width="1280"
+                  height="1024"></applet>
+        </div>
+        <div class="jvm-status">
+          <span><span class="lamp" id="jvm-lamp">[ ** ]</span> <span id="jvm-text">cold start &mdash; loading cheerpj runtime</span></span>
+          <span id="jvm-elapsed">0.0s</span>
+        </div>
+      </div>
+
+      <!-- notes -->
+      <div class="section">
+        <h2>Notes</h2>
+        <p>This page is served off the homelab box and runs a real Java applet in the browser.
+        No plugin, no JVM install: CheerpJ compiles the Java 8 runtime to WebAssembly and runs
+        the bytecode client side. The applet above sets
+        <code>com.sun.java.swing.plaf.motif.MotifLookAndFeel</code>, so the widgets you see are
+        drawn by Swing's real Motif look and feel, not simulated in CSS.</p>
+        <p>The page chrome around it is hand written CSS following the same rules: square
+        corners, two pixel bevels, system gray, and no space that is not carrying data.</p>
+      </div>
+
+      <!-- service table -->
+      <div class="section">
+        <h2>Service Status</h2>
+        <table class="data">
+          <caption>systemd units polled every 30s &mdash; last sweep 20:43:07</caption>
+          <thead>
+            <tr>
+              <th>SERVICE</th><th>HOST</th><th>PORT</th><th>STATE</th><th>UPTIME</th><th>CPU</th><th>MEM</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>proxmox-ve</td><td>pve01</td><td>8006</td><td class="up">RUNNING</td><td>41d06h</td><td>2.1%</td><td>1.9G</td></tr>
+            <tr><td>vaultwarden</td><td>vault01</td><td>8443</td><td class="up">RUNNING</td><td>17d22h</td><td>0.4%</td><td>212M</td></tr>
+            <tr><td>truenas-scale</td><td>nas00</td><td>443</td><td class="up">RUNNING</td><td>41d05h</td><td>3.7%</td><td>6.1G</td></tr>
+            <tr><td>pihole-ftl</td><td>dns00</td><td>53</td><td class="up">RUNNING</td><td>41d06h</td><td>0.2%</td><td>96M</td></tr>
+            <tr><td>k3s-agent</td><td>k3s-w01</td><td>6443</td><td class="up">RUNNING</td><td>09d14h</td><td>5.9%</td><td>1.4G</td></tr>
+            <tr><td>k3s-agent</td><td>k3s-w02</td><td>6443</td><td class="warn">DEGRADED</td><td>02d01h</td><td>8.8%</td><td>1.7G</td></tr>
+            <tr><td>restic-timer</td><td>backup01</td><td>--</td><td class="warn">WAITING</td><td>41d06h</td><td>0.0%</td><td>18M</td></tr>
+            <tr><td>jellyfin</td><td>nas00</td><td>8096</td><td class="up">RUNNING</td><td>12d03h</td><td>1.1%</td><td>884M</td></tr>
+            <tr><td>grafana</td><td>pve01</td><td>3000</td><td class="up">RUNNING</td><td>41d06h</td><td>0.9%</td><td>301M</td></tr>
+            <tr><td>minecraft</td><td>k3s-w01</td><td>25565</td><td class="down">STOPPED</td><td>--</td><td>0.0%</td><td>0M</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- boot transcript -->
+      <div class="section">
+        <h2>Boot Transcript</h2>
+        <pre class="term">homelab.local login: <b>root</b>
+Last login: Fri Aug  7 20:41:55 on dtterm
+$ systemctl --failed --no-legend
+  k3s-agent.service   loaded failed failed  Lightweight Kubernetes
+$ zpool status -x
+  pool 'tank' is healthy
+$ uname -srm
+  Linux 6.8.4-lts x86_64
+$ _</pre>
+      </div>
+
+    </div><!-- /main -->
+  </div><!-- /workspace -->
+
+  <!-- ================= status bar ================= -->
+  <div class="statusbar">
+    <span id="status-msg">Ready.</span>
+    <span>units: 10</span>
+    <span>alerts: 2</span>
+    <span id="status-clock">--:--:--</span>
+  </div>
+
+</div><!-- /frame -->
+
+<!-- ================= CDE front panel ================= -->
+<div class="frontpanel">
+  <a href="#">Overview</a>
+  <a href="#">Hosts</a>
+  <a href="#">Storage</a>
+  <a href="#">Network</a>
+  <a href="#">Backups</a>
+  <a href="#">Docs</a>
+  <span class="clock" id="panel-clock">-- --- --:--</span>
+</div>
+
+<!-- ================= site footer ================= -->
+<div class="sitefooter">
+  <span>Screwhead Networks &copy; 1999</span>
+  <span>github: <a class="link90s" href="https://github.com/prestonbalthaus-lgtm">https://github.com/prestonbalthaus-lgtm</a></span>
+</div>
+
+<script src="../site.js"></script>
+
+</body>
+</html>

@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Screwhead Networks -- Server Info</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="frame">
+
+  <!-- ================= site header ================= -->
+  <div class="siteheader">
+    <svg class="javalogo" viewBox="0 0 32 32" shape-rendering="crispEdges" role="img" aria-label="Java">
+      <path d="M12 3q3 3 0 6t0 5" fill="none" stroke="#800000" stroke-width="2"/>
+      <path d="M19 4q3 3 0 6t0 4" fill="none" stroke="#800000" stroke-width="2"/>
+      <path d="M7 16h16v6q0 4-4 4h-8q-4 0-4-4z" fill="#000080" stroke="#000000" stroke-width="1.5"/>
+      <path d="M23 17q5 0 5 3.5T23 24" fill="none" stroke="#000000" stroke-width="2"/>
+      <rect x="5" y="27" width="21" height="3" fill="#000000"/>
+    </svg>
+    <div class="brand">
+      <span class="brand-name">SCREWHEAD NETWORKS</span>
+      <span class="brand-sub">powered by java &middot; est. 1999</span>
+    </div>
+    <span class="badge">public web server</span>
+  </div>
+
+  <!-- ================= title bar ================= -->
+  <div class="titlebar">
+    <div class="title-menu"></div>
+    <div class="title-text">Screwhead Networks &mdash; <span class="host">Server Info</span> &mdash; dtwm</div>
+    <div class="title-buttons"><span class="min"></span><span class="max"></span></div>
+  </div>
+
+  <!-- ================= navigation ================= -->
+  <ul class="menubar">
+    <li><a href="index.html">Home</a></li>
+    <li><a href="peering.html">Peering</a></li>
+    <li><a href="layout.html">Layout</a></li>
+    <li class="cur"><a href="server-info.html">Server Info</a></li>
+    <li class="right"><a href="login.html">Login</a></li>
+  </ul>
+
+  <!-- ================= tool bar ================= -->
+  <div class="toolbar">
+    <button class="tool" type="button">&lt;&lt; Back</button>
+    <button class="tool" type="button">Forward &gt;&gt;</button>
+    <button class="tool" type="button">Reload</button>
+    <span class="sep"></span>
+    <div class="location">http://www.screwheadnetworks.com/server-info.html</div>
+  </div>
+
+  <!-- ================= page body ================= -->
+  <div class="main">
+
+    <div class="section">
+      <h2>Server Info &mdash; Equipment Inventory</h2>
+      <table class="data">
+        <caption>placeholder inventory &mdash; swap for the real kit list</caption>
+        <thead>
+          <tr>
+            <th>DEVICE</th><th>TYPE</th><th>USE CASE</th><th>MANUFACTURER</th><th>QTY</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>ASR 1006X</td><td>Router</td><td>Core routing</td><td>Cisco</td><td>1</td></tr>
+          <tr><td>ASR 1002X</td><td>Router</td><td>Edge / transit</td><td>Cisco</td><td>1</td></tr>
+          <tr><td>7206 VXR</td><td>Router</td><td>Lab / spare</td><td>Cisco</td><td>1</td></tr>
+          <tr><td>Catalyst 3750X</td><td>Switch</td><td>Access, PoE</td><td>Cisco</td><td>2</td></tr>
+          <tr><td>US-24-250W</td><td>Switch</td><td>Access, PoE</td><td>Ubiquiti</td><td>1</td></tr>
+          <tr><td>SG-3100</td><td>Firewall</td><td>Perimeter / VPN</td><td>Netgate</td><td>1</td></tr>
+          <tr><td>PowerEdge R620</td><td>Server</td><td>Hypervisor</td><td>Dell</td><td>2</td></tr>
+          <tr><td>SYS-6018R</td><td>Server</td><td>Bulk storage</td><td>Supermicro</td><td>1</td></tr>
+          <tr><td>Raspberry Pi 4</td><td>Server</td><td>DNS / monitoring</td><td>Raspberry Pi</td><td>3</td></tr>
+          <tr><td>SMT1500RM2U</td><td>UPS</td><td>Rack power</td><td>APC</td><td>1</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ================= status bar ================= -->
+  <div class="statusbar">
+    <span id="status-msg">Ready.</span>
+    <span>Screwhead Networks</span>
+    <span id="status-clock">--:--:--</span>
+  </div>
+
+</div><!-- /frame -->
+
+<!-- ================= site footer ================= -->
+<div class="sitefooter">
+  <span>Screwhead Networks &copy; 1999</span>
+  <span>github: <a class="link90s" href="https://github.com/prestonbalthaus-lgtm">https://github.com/prestonbalthaus-lgtm</a></span>
+</div>
+
+<script src="site.js"></script>
+
+</body>
+</html>
