@@ -43,6 +43,7 @@ Docker.
 | What | Detail |
 |---|---|
 | OS | Linux or macOS with **Podman** (preferred) or **Docker** |
+| CPU | x86-64 **and** ARM64 (Apple M-series, Graviton) — the image publishes both `linux/amd64` and `linux/arm64`, so pulls run natively on either |
 | Terminal | 100+ columns recommended; 24-bit colour (any modern emulator) |
 | Disk | ~2 GB for the container image, a few MB per run for VTU output |
 | RAM | depends on mesh preset — see table below |
@@ -238,3 +239,5 @@ tool at engineering accuracy — not a validated thermal-certification tool.
   ask before letting you overcommit.
 - **SELinux (Fedora/RHEL)** — the mount uses `:z` relabelling; if you run
   the container manually, keep that flag.
+- **macOS: "VM is not running"** — start the engine's VM first:
+  `podman machine start` (or open Docker Desktop), then `./run.sh` again.

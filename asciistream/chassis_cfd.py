@@ -1844,16 +1844,17 @@ def build_iso_panel(press, geo, max_cols,
     fan_style = "bold " + _hex(COL_FANLN)
     seg(proj(0, jf, 0), proj(nx - 1, jf, 0), _hex(COL_FANLN))
 
-    # pressure sheet, far row first so nearer rows overdraw (painter's algo)
+    # pressure sheet, far row first so nearer rows overdraw (painter's algo).
+    # Full grid connectivity (gnuplot-style): every finite node links to BOTH
+    # its +z neighbour (i, j+1) and its +x neighbour (i+1, j).
     hgt = np.where(finite, np.round(tval * ISO_HMAX), 0.0)
-    cross = sorted(set(list(range(0, nz, 2)) + [nz - 1]))
     for i in range(nx):
         for j in range(nz - 1):
             if finite[i, j] and finite[i, j + 1]:
                 seg(proj(i, j, hgt[i, j]), proj(i, j + 1, hgt[i, j + 1]),
                     _hex(cfd_colormap(0.5 * (tval[i, j] + tval[i, j + 1]))))
         if i < nx - 1:
-            for j in cross:
+            for j in range(nz):
                 if finite[i, j] and finite[i + 1, j]:
                     seg(proj(i, j, hgt[i, j]), proj(i + 1, j, hgt[i + 1, j]),
                         _hex(cfd_colormap(
