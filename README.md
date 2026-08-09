@@ -8,9 +8,12 @@ The goal of this infrastructure isn't just to tinker—it's built to replicate a
 
 ## 🚀 Featured Project: ASCIISTREAM (Terminal CFD)
 
+![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white) ![CFD FEniCS dolfinx](https://img.shields.io/badge/CFD-FEniCS%20dolfinx-red?style=flat-square) ![MPI Multi-Core](https://img.shields.io/badge/MPI-Multi--Core-green?style=flat-square) ![TUI Rich](https://img.shields.io/badge/TUI-Rich-purple?style=flat-square) ![Arch x86_64 | ARM64](https://img.shields.io/badge/Arch-x86__64%20%7C%20ARM64-blue?style=flat-square)
+
 **ASCIISTREAM** is a custom-built, terminal-native Computational Fluid Dynamics (CFD) engine. It is designed to model server chassis airflow, calculate pressure gradients, and render 24-bit ANSI color and 3D wireframe fluid dynamics directly in the command line using MPI multi-processing.
 
-![ASCIISTREAM Demo Video/GIF](https://github.com/user-attachments/assets/56ef9a9c-fcfe-46d0-9120-84a0a479dad5)
+<!-- HTML video tag natively supports WebM in GitHub Markdown -->
+<video src="asciistream/Screencast_20260809_230151.webm" autoplay loop muted playsinline width="100%"></video>
 > *Watch ASCIISTREAM dynamically calculate and render airflow through a 2U server chassis in real-time.*
 
 **Key Features:**
