@@ -1,0 +1,881 @@
+{
+  "fans": {
+    "supermicro-fan-0118l4": {
+      "display": "Supermicro FAN-0118L4",
+      "max_cfm": 100.0,
+      "max_mmh2o": 44.95,
+      "rpm": 9500,
+      "max_dBA": 60.5,
+      "max_wattage": 10.8
+    },
+    "arctic-s8038-10k": {
+      "display": "ARCTIC S8038-10K",
+      "max_cfm": 102.0,
+      "max_mmh2o": 51.0,
+      "rpm": 10000,
+      "max_dBA": 48.0,
+      "max_wattage": 7.2
+    },
+    "silverstone-fhs80x": {
+      "display": "SilverStone FHS80X (12V)",
+      "max_cfm": 83.66,
+      "max_mmh2o": 50.77,
+      "rpm": 9500,
+      "max_dBA": 62.5,
+      "max_wattage": 12.0
+    },
+    "generic-40mm-dual": {
+      "display": "Generic 40x56mm dual-rotor (1U/switch class)",
+      "max_cfm": 22.0,
+      "max_mmh2o": 90.0,
+      "rpm": 21000,
+      "max_dBA": 57.0,
+      "max_wattage": 9.6
+    },
+    "generic-60mm": {
+      "display": "Generic 60x38mm high-static (router class)",
+      "max_cfm": 38.0,
+      "max_mmh2o": 30.0,
+      "rpm": 13000,
+      "max_dBA": 54.0,
+      "max_wattage": 7.2
+    },
+    "generic-120mm": {
+      "display": "Generic 120x25mm case fan (ATX class)",
+      "max_cfm": 72.0,
+      "max_mmh2o": 3.0,
+      "rpm": 1800,
+      "max_dBA": 27.0,
+      "max_wattage": 3.0
+    }
+  },
+  "servers": {
+    "6029U": {
+      "display_name": "Supermicro SuperServer 6029U-E1CR4T",
+      "form_factor": "2U",
+      "chassis_width": 0.43,
+      "chassis_height": 0.08,
+      "chassis_length": 0.7,
+      "fan_wall_z": 0.25,
+      "fan_count": 4,
+      "drive_bay_count": 8,
+      "drive_bay_type": "3.5in SAS",
+      "drive_bays_front": 8,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.05,
+        0.2
+      ],
+      "drive_zeta": 95.0,
+      "drive_permeability": 5e-07,
+      "cpu_sockets": 2,
+      "cpu_zone_z": [
+        0.35,
+        0.45
+      ],
+      "cpu_zeta": 55.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 24,
+      "populated_pcie_slots": 2,
+      "pcie_zone_z": [
+        0.55,
+        0.65
+      ],
+      "heat_load": 350.0,
+      "baseline_zeta": 25.0,
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "R640": {
+      "display_name": "Dell PowerEdge R640 (10-bay)",
+      "form_factor": "1U",
+      "chassis_width": 0.434,
+      "chassis_height": 0.043,
+      "chassis_length": 0.734,
+      "fan_wall_z": 0.18,
+      "fan_count": 8,
+      "drive_bay_count": 10,
+      "drive_bay_type": "2.5in (8 NVMe + 2 SATA)",
+      "drive_bays_front": 10,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.13
+      ],
+      "drive_zeta": 110.0,
+      "drive_permeability": 3e-07,
+      "cpu_sockets": 2,
+      "cpu_zone_z": [
+        0.3,
+        0.4
+      ],
+      "cpu_zeta": 70.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 24,
+      "populated_pcie_slots": 2,
+      "pcie_zone_z": [
+        0.55,
+        0.65
+      ],
+      "heat_load": 300.0,
+      "baseline_zeta": 25.0,
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "R740xd": {
+      "display_name": "Dell PowerEdge R740xd (24-bay)",
+      "form_factor": "2U",
+      "chassis_width": 0.434,
+      "chassis_height": 0.087,
+      "chassis_length": 0.715,
+      "fan_wall_z": 0.2,
+      "fan_count": 6,
+      "drive_bay_count": 24,
+      "drive_bay_type": "2.5in SFF",
+      "drive_bays_front": 24,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.14
+      ],
+      "drive_zeta": 140.0,
+      "drive_permeability": 2.5e-07,
+      "cpu_sockets": 2,
+      "cpu_zone_z": [
+        0.34,
+        0.46
+      ],
+      "cpu_zeta": 55.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 24,
+      "populated_pcie_slots": 3,
+      "pcie_zone_z": [
+        0.55,
+        0.66
+      ],
+      "heat_load": 400.0,
+      "baseline_zeta": 25.0,
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "DL360": {
+      "display_name": "HPE ProLiant DL360 Gen10",
+      "form_factor": "1U",
+      "chassis_width": 0.434,
+      "chassis_height": 0.043,
+      "chassis_length": 0.7,
+      "fan_wall_z": 0.17,
+      "fan_count": 7,
+      "drive_bay_count": 8,
+      "drive_bay_type": "2.5in SFF",
+      "drive_bays_front": 8,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.12
+      ],
+      "drive_zeta": 80.0,
+      "drive_permeability": 4e-07,
+      "cpu_sockets": 2,
+      "cpu_zone_z": [
+        0.3,
+        0.4
+      ],
+      "cpu_zeta": 70.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 24,
+      "populated_pcie_slots": 2,
+      "pcie_zone_z": [
+        0.52,
+        0.62
+      ],
+      "heat_load": 290.0,
+      "baseline_zeta": 25.0,
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "DL380": {
+      "display_name": "HPE ProLiant DL380 Gen10",
+      "form_factor": "2U",
+      "chassis_width": 0.434,
+      "chassis_height": 0.087,
+      "chassis_length": 0.71,
+      "fan_wall_z": 0.19,
+      "fan_count": 6,
+      "drive_bay_count": 8,
+      "drive_bay_type": "2.5in SFF",
+      "drive_bays_front": 8,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.13
+      ],
+      "drive_zeta": 70.0,
+      "drive_permeability": 4e-07,
+      "cpu_sockets": 2,
+      "cpu_zone_z": [
+        0.33,
+        0.44
+      ],
+      "cpu_zeta": 55.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 24,
+      "populated_pcie_slots": 4,
+      "pcie_zone_z": [
+        0.54,
+        0.66
+      ],
+      "heat_load": 380.0,
+      "baseline_zeta": 25.0,
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "C4130": {
+      "display_name": "Dell PowerEdge C4130 (4x passive GPU)",
+      "form_factor": "1U",
+      "chassis_width": 0.434,
+      "chassis_height": 0.0431,
+      "chassis_length": 0.886,
+      "fan_wall_z": 0.22,
+      "fan_count": 8,
+      "drive_bay_count": 2,
+      "drive_bay_type": "2.5in SATA SSD",
+      "drive_bays_front": 2,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.1
+      ],
+      "drive_zeta": 30.0,
+      "drive_permeability": 6e-07,
+      "cpu_sockets": 2,
+      "cpu_zone_z": [
+        0.3,
+        0.42
+      ],
+      "cpu_zeta": 60.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 16,
+      "populated_pcie_slots": 0,
+      "pcie_zone_z": [
+        0.55,
+        0.65
+      ],
+      "heat_load": 1500.0,
+      "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "gpu_1",
+          "label": "GPU 1",
+          "type": "porous",
+          "box": [
+            0.01,
+            0.006,
+            0.56,
+            0.09,
+            0.037,
+            0.83
+          ],
+          "zeta": 170.0,
+          "permeability": 1.5e-07,
+          "telemetry": "gpu"
+        },
+        {
+          "name": "gpu_2",
+          "label": "GPU 2",
+          "type": "porous",
+          "box": [
+            0.096,
+            0.006,
+            0.56,
+            0.176,
+            0.037,
+            0.83
+          ],
+          "zeta": 170.0,
+          "permeability": 1.5e-07,
+          "telemetry": "gpu"
+        },
+        {
+          "name": "gpu_3",
+          "label": "GPU 3",
+          "type": "porous",
+          "box": [
+            0.258,
+            0.006,
+            0.56,
+            0.338,
+            0.037,
+            0.83
+          ],
+          "zeta": 170.0,
+          "permeability": 1.5e-07,
+          "telemetry": "gpu"
+        },
+        {
+          "name": "gpu_4",
+          "label": "GPU 4",
+          "type": "porous",
+          "box": [
+            0.344,
+            0.006,
+            0.56,
+            0.424,
+            0.037,
+            0.83
+          ],
+          "zeta": 170.0,
+          "permeability": 1.5e-07,
+          "telemetry": "gpu"
+        },
+        {
+          "name": "psu_bank",
+          "label": "PSU 1+1",
+          "type": "solid",
+          "box": [
+            0.182,
+            0.006,
+            0.6,
+            0.252,
+            0.037,
+            0.876
+          ]
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 9.0
+        },
+        "fine": {
+          "element_size_mm": 4.5
+        },
+        "ultra": {
+          "element_size_mm": 2.8
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 40.0,
+        "pressure_min_pa": -300.0,
+        "deadzone_speed_min_ms": 0.1,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 1.0,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "A7050X3": {
+      "display_name": "Arista 7050CX3-32S (32x QSFP100 1U)",
+      "form_factor": "1U",
+      "chassis_width": 0.439,
+      "chassis_height": 0.0445,
+      "chassis_length": 0.406,
+      "fan_wall_z": 0.36,
+      "fan_count": 4,
+      "drive_bay_count": 0,
+      "drive_bay_type": null,
+      "drive_bays_front": 0,
+      "drive_bays_rear": 0,
+      "cpu_sockets": 1,
+      "cpu_zone_z": [
+        0.15,
+        0.24
+      ],
+      "cpu_zeta": 40.0,
+      "cpu_permeability": 3e-07,
+      "cpu_label": "ASIC",
+      "total_dimm_slots": 4,
+      "populated_pcie_slots": 0,
+      "heat_load": 350.0,
+      "baseline_zeta": 20.0,
+      "optics_zone_z": [
+        0.005,
+        0.05
+      ],
+      "custom_zones": [
+        {
+          "name": "optics_cage",
+          "label": "QSFP CAGE",
+          "type": "porous",
+          "box": [
+            0.0,
+            0.0,
+            0.005,
+            0.439,
+            0.0445,
+            0.05
+          ],
+          "zeta": 55.0,
+          "permeability": 5e-07,
+          "telemetry": "optics"
+        },
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "solid",
+          "box": [
+            0.006,
+            0.004,
+            0.365,
+            0.081,
+            0.0405,
+            0.4
+          ]
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "solid",
+          "box": [
+            0.358,
+            0.004,
+            0.365,
+            0.433,
+            0.0405,
+            0.4
+          ]
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 10.0
+        },
+        "medium": {
+          "element_size_mm": 6.0
+        },
+        "fine": {
+          "element_size_mm": 3.0
+        },
+        "ultra": {
+          "element_size_mm": 1.9
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 45.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.1,
+        "cpu_min_airflow_ms": 0.8,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.8
+      }
+    },
+    "SN2700": {
+      "display_name": "Mellanox SN2700 (32x QSFP28 1U)",
+      "form_factor": "1U",
+      "chassis_width": 0.427,
+      "chassis_height": 0.0432,
+      "chassis_length": 0.686,
+      "fan_wall_z": 0.58,
+      "fan_count": 4,
+      "drive_bay_count": 0,
+      "drive_bay_type": null,
+      "drive_bays_front": 0,
+      "drive_bays_rear": 0,
+      "cpu_sockets": 1,
+      "cpu_zone_z": [
+        0.24,
+        0.34
+      ],
+      "cpu_zeta": 42.0,
+      "cpu_permeability": 3e-07,
+      "cpu_label": "ASIC",
+      "total_dimm_slots": 4,
+      "populated_pcie_slots": 0,
+      "heat_load": 400.0,
+      "baseline_zeta": 20.0,
+      "optics_zone_z": [
+        0.005,
+        0.05
+      ],
+      "custom_zones": [
+        {
+          "name": "optics_cage",
+          "label": "QSFP CAGE",
+          "type": "porous",
+          "box": [
+            0.0,
+            0.0,
+            0.005,
+            0.427,
+            0.0432,
+            0.05
+          ],
+          "zeta": 55.0,
+          "permeability": 5e-07,
+          "telemetry": "optics"
+        },
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "solid",
+          "box": [
+            0.005,
+            0.004,
+            0.59,
+            0.08,
+            0.039,
+            0.675
+          ]
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "solid",
+          "box": [
+            0.347,
+            0.004,
+            0.59,
+            0.422,
+            0.039,
+            0.675
+          ]
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 12.0
+        },
+        "medium": {
+          "element_size_mm": 7.0
+        },
+        "fine": {
+          "element_size_mm": 3.5
+        },
+        "ultra": {
+          "element_size_mm": 2.2
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 45.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.1,
+        "cpu_min_airflow_ms": 0.8,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.8
+      }
+    },
+    "ASR1006X": {
+      "display_name": "Cisco ASR 1006-X (6RU aggregation router)",
+      "form_factor": "6U",
+      "chassis_width": 0.4374,
+      "chassis_height": 0.2659,
+      "chassis_length": 0.461,
+      "fan_wall_z": 0.1,
+      "fan_count": 6,
+      "drive_bay_count": 0,
+      "drive_bay_type": null,
+      "drive_bays_front": 0,
+      "drive_bays_rear": 0,
+      "cpu_sockets": 0,
+      "total_dimm_slots": 0,
+      "populated_pcie_slots": 0,
+      "heat_load": 1800.0,
+      "baseline_zeta": 30.0,
+      "optics_zone_z": [
+        0.13,
+        0.17
+      ],
+      "custom_zones": [
+        {
+          "name": "air_filter",
+          "label": "AIR FILTER",
+          "type": "porous",
+          "box": [
+            0.0,
+            0.0,
+            0.005,
+            0.4374,
+            0.2659,
+            0.042
+          ],
+          "zeta": 20.0,
+          "permeability": 8e-07
+        },
+        {
+          "name": "psu_bank",
+          "label": "PSU BANK (6x)",
+          "type": "solid",
+          "box": [
+            0.02,
+            0.005,
+            0.05,
+            0.417,
+            0.07,
+            0.095
+          ]
+        },
+        {
+          "name": "linecard_bay",
+          "label": "LINE CARDS",
+          "type": "porous",
+          "box": [
+            0.02,
+            0.09,
+            0.13,
+            0.4174,
+            0.17,
+            0.4
+          ],
+          "zeta": 110.0,
+          "permeability": 3e-07
+        },
+        {
+          "name": "rp_esp_bay",
+          "label": "RP / ESP",
+          "type": "porous",
+          "box": [
+            0.02,
+            0.18,
+            0.13,
+            0.4174,
+            0.255,
+            0.4
+          ],
+          "zeta": 90.0,
+          "permeability": 3e-07
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 21.0
+        },
+        "medium": {
+          "element_size_mm": 12.5
+        },
+        "fine": {
+          "element_size_mm": 6.5
+        },
+        "ultra": {
+          "element_size_mm": 4.0
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 45.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.08,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.4
+      }
+    },
+    "ATX-MID": {
+      "display_name": "Generic ATX Mid-Tower (side view)",
+      "form_factor": "MT",
+      "chassis_width": 0.44,
+      "chassis_height": 0.2,
+      "chassis_length": 0.46,
+      "fan_wall_z": 0.05,
+      "fan_count": 3,
+      "drive_bay_count": 2,
+      "drive_bay_type": "3.5in HDD",
+      "drive_bays_front": 2,
+      "drive_bays_rear": 0,
+      "cpu_sockets": 1,
+      "cpu_zone_z": [
+        0.2,
+        0.29
+      ],
+      "cpu_zeta": 22.0,
+      "cpu_permeability": 8e-07,
+      "cpu_label": "CPU TOWER",
+      "total_dimm_slots": 4,
+      "populated_pcie_slots": 0,
+      "heat_load": 450.0,
+      "baseline_zeta": 15.0,
+      "custom_zones": [
+        {
+          "name": "front_mesh",
+          "label": "FRONT MESH",
+          "type": "porous",
+          "box": [
+            0.0,
+            0.0,
+            0.005,
+            0.44,
+            0.2,
+            0.022
+          ],
+          "zeta": 12.0,
+          "permeability": 1e-06
+        },
+        {
+          "name": "hdd_cage",
+          "label": "HDD CAGE",
+          "type": "porous",
+          "box": [
+            0.3,
+            0.01,
+            0.06,
+            0.43,
+            0.19,
+            0.17
+          ],
+          "zeta": 70.0,
+          "permeability": 4e-07
+        },
+        {
+          "name": "gpu_card",
+          "label": "GPU",
+          "type": "porous",
+          "box": [
+            0.262,
+            0.08,
+            0.18,
+            0.3,
+            0.196,
+            0.41
+          ],
+          "zeta": 55.0,
+          "permeability": 5e-07,
+          "telemetry": "gpu"
+        },
+        {
+          "name": "psu_shroud",
+          "label": "PSU",
+          "type": "solid",
+          "box": [
+            0.375,
+            0.005,
+            0.28,
+            0.435,
+            0.195,
+            0.455
+          ]
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 20.0
+        },
+        "medium": {
+          "element_size_mm": 12.0
+        },
+        "fine": {
+          "element_size_mm": 6.0
+        },
+        "ultra": {
+          "element_size_mm": 3.7
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 24.0,
+        "outlet_temp_max_c": 40.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.08,
+        "cpu_min_airflow_ms": 0.3,
+        "gpu_min_airflow_ms": 0.5,
+        "optics_min_airflow_ms": 0.0
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+# --- simulation output (regenerated every run) --------------------------------
+*.vtu
+*.pvtu
+*.h5
+*.xdmf
+cfd_report_*.txt
+
+# --- generated plots (chassis_fan_tool.py / plot_profile.py) -------------------
+pq_curves.png
+server_velocity_profile.png
+
+# --- python -------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# --- local tool state ---------------------------------------------------------
+.claude/settings.local.json
