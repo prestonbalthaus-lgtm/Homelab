@@ -13,7 +13,7 @@ The goal of this infrastructure isn't just to tinker—it's built to replicate a
 **ASCIISTREAM** is a custom-built, terminal-native Computational Fluid Dynamics (CFD) engine. It is designed to model server chassis airflow, calculate pressure gradients, and render 24-bit ANSI color and 3D wireframe fluid dynamics directly in the command line using MPI multi-processing.
 
 <!-- HTML video tag natively supports WebM in GitHub Markdown -->
-<video src="asciistream/Screencast_20260809_230151.webm" autoplay loop muted playsinline width="100%"></video>
+[Screencast_20260809_230151.webm](https://github.com/user-attachments/assets/56ef9a9c-fcfe-46d0-9120-84a0a479dad5)
 > *Watch ASCIISTREAM dynamically calculate and render airflow through a 2U server chassis in real-time.*
 
 **Key Features:**
@@ -52,4 +52,4 @@ The compute side of the house is strictly dedicated to scientific and mathematic
 ## 🛠️ Tech Stack & Preferences
 *   **Hardware:** Heavy preference for Intel compute architectures and enterprise-grade Dell/Supermicro chassis.
 *   **OS/Environment:** Fedora Linux (Workstation) / Rocky Linux (Servers).
-*   **Networking:** BGP, OSPF, GPON, Mellanox ConnectX, and raw single-mode fiber.[Screencast_20260809_230151.webm](https://github.com/user-attachments/assets/56ef9a9c-fcfe-46d0-9120-84a0a479dad5)
+*   **Networking:** BGP, OSPF, GPON, Mellanox ConnectX, and raw single-mode fiber.
