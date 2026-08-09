@@ -25,7 +25,7 @@ The goal of this infrastructure isn't just to tinker—it's built to replicate a
 
 ## 🌐 The NOC (Network Operations Center)
 
-*Feel free to paste your original NOC description here, but here is an expanded version if you want it!*
+A 1990s Motif-styled Network Operations Center (NOC) dashboard built for the Screwhead Networks CAN. This project utilizes a Java 8 Applet compiled to WebAssembly (via CheerpJ) to render a dynamic, hardware-accelerated BGP topology map at a strict 17 FPS.
 
 The network core is architected as a highly resilient, physical fiber ring topology with centralized Layer 3 routing. Rather than daisy-chaining outbuildings, everything routes back to the main datacenter hub. 
 
