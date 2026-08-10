@@ -6,11 +6,11 @@ The goal of this infrastructure isn't just to tinker—it's built to replicate a
 
 ---
 
-## 🚀 Featured Project: ASCIISTREAM (Terminal CFD) v0.5
+## 🚀 Featured Project: ASCIISTREAM (Terminal CFD) v0.7
 
-![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white) ![CFD FEniCS dolfinx](https://img.shields.io/badge/CFD-FEniCS%20dolfinx-red?style=flat-square) ![MPI Multi-Core](https://img.shields.io/badge/MPI-Multi--Core-green?style=flat-square) ![TUI Rich](https://img.shields.io/badge/TUI-Rich-purple?style=flat-square) ![Arch x86_64 | ARM64](https://img.shields.io/badge/Arch-x86__64%20%7C%20ARM64-blue?style=flat-square)
+![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white) ![CFD FEniCS dolfinx](https://img.shields.io/badge/CFD-FEniCS%20dolfinx-red?style=flat-square) ![MPI Multi-Core](https://img.shields.io/badge/MPI-Multi--Core-green?style=flat-square) ![TUI Rich](https://img.shields.io/badge/TUI-Rich-purple?style=flat-square) ![3D Sixel + gnuplot](https://img.shields.io/badge/3D-Sixel%20%2B%20gnuplot-orange?style=flat-square) ![Arch x86_64 | ARM64](https://img.shields.io/badge/Arch-x86__64%20%7C%20ARM64-blue?style=flat-square)
 
-**ASCIISTREAM** is a custom-built, terminal-native Computational Fluid Dynamics (CFD) engine. It is designed to model server chassis airflow, calculate pressure gradients, and render 24-bit ANSI color fluid dynamics — live particle streaklines plus a CAD-style isometric 3D chassis view — directly in the command line using MPI multi-processing.
+**ASCIISTREAM** is a custom-built, terminal-native Computational Fluid Dynamics (CFD) engine. It is designed to model server chassis airflow, calculate pressure gradients, and render 24-bit ANSI color fluid dynamics — live particle streaklines, btop-style solver telemetry, and a 3D pressure surface drawn in true Sixel raster graphics by gnuplot (with the CAD-style ASCII isometric view as the universal fallback and report renderer) — directly in the command line using MPI multi-processing.
 
 <!-- HTML video tag natively supports WebM in GitHub Markdown -->
 <img width="800" height="461" alt="ezgif com-video-to-gif-converter" src="https://github.com/user-attachments/assets/1bb0bd0b-647d-4f59-86ab-2b2131e345fe" />
@@ -19,7 +19,8 @@ The goal of this infrastructure isn't just to tinker—it's built to replicate a
 
 **Key Features:**
 *   **DOLFINx/FEniCS Engine:** Solves Navier-Stokes momentum and continuity equations.
-*   **MPI Multi-Threading:** Distributes the math across hardware cores for rapid processing.
+*   **MPI Multi-Threading:** Distributes the math across hardware cores for rapid processing — rank count uncapped, sized by you.
+*   **Privacy-Scoped Telemetry:** btop-style Braille dashboards track ONLY the solver's own processes — USS memory and affinity-pool CPU — never global system stats.
 *   **Dynamic Configurations:** Swap out server geometries (1U, 2U, specific drive bay layouts) and fan curves on the fly via JSON — or answer the wizard's hardware prompts (drive types, wattage, GPUs, NICs, target temps) for per-run what-ifs, and mint entirely new chassis profiles without leaving the terminal.
 *   **Hardware Telemetry:** Built-in alerts for acoustic noise, power draw, and thermal choking.
 
