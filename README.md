@@ -10,7 +10,7 @@ The goal of this infrastructure isn't just to tinker—it's built to replicate a
 
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white) ![CFD FEniCS dolfinx](https://img.shields.io/badge/CFD-FEniCS%20dolfinx-red?style=flat-square) ![MPI Multi-Core](https://img.shields.io/badge/MPI-Multi--Core-green?style=flat-square) ![TUI Rich](https://img.shields.io/badge/TUI-Rich-purple?style=flat-square) ![Arch x86_64 | ARM64](https://img.shields.io/badge/Arch-x86__64%20%7C%20ARM64-blue?style=flat-square)
 
-**ASCIISTREAM** is a custom-built, terminal-native Computational Fluid Dynamics (CFD) engine. It is designed to model server chassis airflow, calculate pressure gradients, and render 24-bit ANSI color and 3D wireframe fluid dynamics directly in the command line using MPI multi-processing.
+**ASCIISTREAM** is a custom-built, terminal-native Computational Fluid Dynamics (CFD) engine. It is designed to model server chassis airflow, calculate pressure gradients, and render 24-bit ANSI color fluid dynamics — live particle streaklines plus a CAD-style isometric 3D chassis view — directly in the command line using MPI multi-processing.
 
 <!-- HTML video tag natively supports WebM in GitHub Markdown -->
 <img width="800" height="461" alt="ezgif com-video-to-gif-converter" src="https://github.com/user-attachments/assets/1bb0bd0b-647d-4f59-86ab-2b2131e345fe" />
@@ -20,7 +20,7 @@ The goal of this infrastructure isn't just to tinker—it's built to replicate a
 **Key Features:**
 *   **DOLFINx/FEniCS Engine:** Solves Navier-Stokes momentum and continuity equations.
 *   **MPI Multi-Threading:** Distributes the math across hardware cores for rapid processing.
-*   **Dynamic Configurations:** Swap out server geometries (1U, 2U, specific drive bay layouts) and fan curves on the fly via JSON.
+*   **Dynamic Configurations:** Swap out server geometries (1U, 2U, specific drive bay layouts) and fan curves on the fly via JSON — or answer the wizard's hardware prompts (drive types, wattage, GPUs, NICs, target temps) for per-run what-ifs, and mint entirely new chassis profiles without leaving the terminal.
 *   **Hardware Telemetry:** Built-in alerts for acoustic noise, power draw, and thermal choking.
 
 [View the full ASCIISTREAM source code and documentation here.](./asciistream)

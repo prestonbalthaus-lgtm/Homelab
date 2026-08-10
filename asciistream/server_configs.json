@@ -83,6 +83,42 @@
       ],
       "heat_load": 350.0,
       "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "porous",
+          "box": [
+            0.005,
+            0.006,
+            0.652,
+            0.085,
+            0.074,
+            0.696
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "porous",
+          "box": [
+            0.345,
+            0.006,
+            0.652,
+            0.425,
+            0.074,
+            0.696
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
       "mesh_settings": {
         "coarse": {
           "element_size_mm": 15.0
@@ -140,6 +176,42 @@
       ],
       "heat_load": 300.0,
       "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "porous",
+          "box": [
+            0.005,
+            0.004,
+            0.655,
+            0.08,
+            0.039,
+            0.729
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "porous",
+          "box": [
+            0.354,
+            0.004,
+            0.655,
+            0.429,
+            0.039,
+            0.729
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
       "mesh_settings": {
         "coarse": {
           "element_size_mm": 15.0
@@ -197,6 +269,42 @@
       ],
       "heat_load": 400.0,
       "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "porous",
+          "box": [
+            0.005,
+            0.006,
+            0.665,
+            0.08,
+            0.081,
+            0.71
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "porous",
+          "box": [
+            0.354,
+            0.006,
+            0.665,
+            0.429,
+            0.081,
+            0.71
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
       "mesh_settings": {
         "coarse": {
           "element_size_mm": 15.0
@@ -254,6 +362,42 @@
       ],
       "heat_load": 290.0,
       "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "porous",
+          "box": [
+            0.005,
+            0.004,
+            0.628,
+            0.08,
+            0.039,
+            0.695
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "porous",
+          "box": [
+            0.354,
+            0.004,
+            0.628,
+            0.429,
+            0.039,
+            0.695
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
       "mesh_settings": {
         "coarse": {
           "element_size_mm": 15.0
@@ -311,6 +455,42 @@
       ],
       "heat_load": 380.0,
       "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "porous",
+          "box": [
+            0.005,
+            0.006,
+            0.665,
+            0.08,
+            0.081,
+            0.706
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "porous",
+          "box": [
+            0.354,
+            0.006,
+            0.665,
+            0.429,
+            0.081,
+            0.706
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
       "mesh_settings": {
         "coarse": {
           "element_size_mm": 15.0
@@ -444,7 +624,9 @@
             0.252,
             0.037,
             0.876
-          ]
+          ],
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
         }
       ],
       "mesh_settings": {
@@ -527,7 +709,9 @@
             0.081,
             0.0405,
             0.4
-          ]
+          ],
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
         },
         {
           "name": "psu_2",
@@ -540,7 +724,9 @@
             0.433,
             0.0405,
             0.4
-          ]
+          ],
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
         }
       ],
       "mesh_settings": {
@@ -623,7 +809,9 @@
             0.08,
             0.039,
             0.675
-          ]
+          ],
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
         },
         {
           "name": "psu_2",
@@ -636,7 +824,9 @@
             0.422,
             0.039,
             0.675
-          ]
+          ],
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
         }
       ],
       "mesh_settings": {
@@ -711,7 +901,9 @@
             0.417,
             0.07,
             0.095
-          ]
+          ],
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
         },
         {
           "name": "linecard_bay",
@@ -850,7 +1042,9 @@
             0.435,
             0.195,
             0.455
-          ]
+          ],
+          "fan_rpm": 2000,
+          "fan_size_mm": 120
         }
       ],
       "mesh_settings": {
