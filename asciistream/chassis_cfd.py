@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
 ================================================================================
- ASCIISTREAM v5 - terminal CFD for server chassis (launcher/worker + live TUI)
+ ASCIISTREAM v0.7 - terminal CFD for server chassis (launcher/worker + TUI)
  parametric gmsh meshing from server_configs.json + FEniCSx/dolfinx transient
  incremental pressure-correction (Chorin/IPCS family) + MPI worker pool +
  socket-streamed live ASCII particle dashboard and a CAD-style isometric
- 3-D chassis view (rich), with a psutil CPU/RAM widget
+ 3-D chassis view (rich), with a btop-style braille telemetry strip scoped
+ to the solver's own processes
 ================================================================================
 
  ARCHITECTURE (Launcher-Worker)
@@ -21,12 +22,14 @@
        wattage; ambient intake and desired exhaust temperature; GPU
        presence with count + wattage -> meshed PCIe cards + heat load; NIC
        presence -> one more populated slot), fan model (a config fan OR
-       "Custom fan" with user-entered max CFM / max mmH2O), MPI ranks (up
-       to 16, oversubscription supported), simulated time span, the time
-       step dt, and the MESH RESOLUTION preset (RAM guidance per level; a
-       MemTotal safeguard asks for confirmation - EXCEPT "ultra", which on
-       a machine under 32 GB raises an unhandled MemoryError and crashes,
-       by design). Hardware answers are RUNTIME overrides carried to the
+       "Custom fan" with user-entered max CFM / max mmH2O), MPI ranks (ANY
+       integer, no ceiling - default is this machine's hardware thread
+       count, oversubscription supported), simulated time span, the time
+       step dt, and the MESH RESOLUTION (four presets with RAM guidance
+       per level PLUS a custom element size accepted down to the 0.5 mm
+       floor; a MemTotal safeguard asks for confirmation - EXCEPT the
+       "ultra" preset, which on a machine under 32 GB raises an unhandled
+       MemoryError and crashes, by design). Hardware answers are RUNTIME overrides carried to the
        workers in a temp overlay config - the JSON on disk is not edited
        (only new custom-server templates are appended). Then it opens a
        localhost TCP socket and
@@ -51,16 +54,18 @@
        (parallel gather) and rank 0 streams it to the launcher as a
        length-prefixed JSON-header + npz-payload message. If the socket dies
        the solve continues and still writes the VTU output files.
-     - runnable standalone for scripting (--mesh defaults to "coarse",
-       --dt to 0.1 s; for a custom fan pass --fan custom --fan-cfm 95
-       --fan-mmh2o 38):
+     - runnable standalone for scripting (--mesh takes a preset name or a
+       literal element size in mm, e.g. --mesh 0.8, default "coarse";
+       --dt defaults to 0.1 s; for a custom fan pass --fan custom
+       --fan-cfm 95 --fan-mmh2o 38):
          mpiexec --oversubscribe --use-hwthread-cpus -n 12 python3 \
              chassis_cfd.py --worker --profile 6029U \
              --fan supermicro-fan-0118l4 --sim-time 10 --mesh medium --dt 0.05
        (the Open MPI flags are optional there and MPICH rejects them - the
        launcher adds them for you only when Open MPI is detected)
      - mesh presets (config mesh_settings, per profile): coarse 15 mm /
-       medium 8 mm / fine 4 mm / ultra 2.5 mm element size; the preset is
+       medium 8 mm / fine 4 mm / ultra 2.5 mm element size; any literal
+       size down to the 0.5 mm floor is also accepted. The chosen lc is
        the fine-band lc, the bulk meshes at min(2.2*lc, 35 mm).
 
  PARAMETRIC MESH ENGINE
@@ -145,20 +150,27 @@
    speed ( . stagnant | ~ slow | - moderate | * fast ), coloured GREEN =
    fast/optimal -> YELLOW = moderate -> RED = stagnation/0 m/s. Explicit
    labels typed over the geometry: [ CPU 1 ], [ CPU 2 ], [ RAM ], [ PCIe ],
-   [ DRIVES ], [ FAN WALL ]. Side panes: FRONT (inlet, with bay ticks),
-   REAR (exhaust) cross-sections and a SYSTEM widget (psutil) with live
-   CPU % and RAM bars while the solver runs and renders. Particles advect
+   [ DRIVES ], [ FAN WALL ]. Side panes: FRONT (inlet, with bay ticks) and
+   REAR (exhaust) cross-sections. A full-width bottom CFD WORKERS strip
+   (btop-style braille graphs + meters, psutil) tracks ONLY the spawned
+   solver tree: USS memory summed over those PIDs and CPU load normalised
+   to their affinity pool - never global system telemetry. Particles advect
    in the mid-height (u_x,u_z) plane - 2-D streaklines of that slice, not
    3-D pathlines. The status line shows simulated time, step, live outlet
    flow and cell count.
-   Pressing [v] (or 2/3) toggles the main pane to the 3-D VIEW: a
-   CAD-style isometric projection of the PHYSICAL chassis - every
-   component box extruded with the ASCII charset ( _ | \\ staircases at 45
-   degrees on screen), top faces colour-filled by the block-averaged local
-   air speed through the CFD colormap (blue = starved -> red = full flow),
-   the fan wall as the gold plane and PSU fans as gold rear-face markers.
-   The final 3-D chassis view is printed after the run and included in the
-   text report alongside the top-down slice.
+   Pressing [v] (or 2/3) switches to the HIGH-FIDELITY 3-D VIEW: on a
+   sixel-capable terminal (DA1 feature 4 autodetect; ASCIISTREAM_SIXEL=1/0
+   forces/disables) the rich Live dashboard is SUSPENDED and a gnuplot
+   `splot` of the streamed mid-height pressure surface - height = P,
+   colour = local |u| through the CFD colormap - is rendered through the
+   sixelgd terminal and blitted as raster graphics into the main pane,
+   with the FRONT/REAR minis and the telemetry strip repainting around it
+   via direct cursor addressing (gnuplot-nox is apt-installed inside the
+   container on first use). When the terminal does not support sixel, or
+   a frame is rejected mid-run, [v] falls back to the 2-D top-down view.
+   The ASCII isometric chassis view (CAD-style extruded component boxes,
+   gold fan wall + PSU markers) remains the post-run console print and
+   the text-report renderer - raster images cannot live in a .txt file.
    100+ column terminal recommended; Ctrl+C stops the dashboard (worker too).
 
  IT TELEMETRY & REPORTING (post-processing; config-driven)
@@ -182,7 +194,7 @@
    The launcher installs 'rich' + 'psutil' into the container on first start
    (no shell wrapper needed - nested quoting broke for some terminal
    frontends); if psutil cannot be installed the dashboard runs without the
-   SYSTEM widget.
+   CFD WORKERS telemetry strip.
    Utility flags: --write-config (dump the example config and exit),
    --config PATH, --worker ... as above (see ARCHITECTURE).
 
@@ -195,6 +207,8 @@
 import io
 import json
 import os
+import re
+import shutil
 import socket
 import struct
 import subprocess
@@ -247,14 +261,12 @@ SEND_EVERY  = 2      # stream a sampled frame every N steps
 KSP_RTOL    = 1.0e-8
 
 # --- MPI launch ---------------------------------------------------------------
-MAX_UI_CORES = 16    # rank ceiling offered by the wizard even on smaller
-                     # CPUs (Open MPI --oversubscribe covers the gap)
-
 # --- Mesh sizing --------------------------------------------------------------
 # Element size comes from the selected mesh preset (server_configs.json ->
-# mesh_settings, chosen in the wizard or via --mesh). The preset lc is the
-# FINE band around the components; the drive/fan band meshes at 1.3*lc and
-# the bulk at min(2.2*lc, 35 mm).
+# mesh_settings) OR from a literal millimetre value - the wizard's custom
+# option and a numeric --mesh both accept any size down to MESH_MM_FLOOR.
+# The chosen lc is the FINE band around the components; the drive/fan band
+# meshes at 1.3*lc and the bulk at min(2.2*lc, 35 mm).
 MESH_LEVEL_ORDER = ["coarse", "medium", "fine", "ultra"]
 MESH_LEVEL_LABEL = {"coarse": "Coarse", "medium": "Medium",
                     "fine": "Fine", "ultra": "Ultra"}
@@ -268,6 +280,12 @@ MESH_RAM_NOTES = {"coarse": "~1-2 GB (Ultra-fast)",
                   "fine": "~10-14 GB (High-Detail, resolves heatsink fins)",
                   "ultra": "~18-24 GB (Extreme fidelity, requires 32GB system)"}
 MESH_RAM_HIGH_GB = {"coarse": 2, "medium": 6, "fine": 14, "ultra": 24}
+MESH_MM_FLOOR    = 0.5   # hard floor [mm] for ANY source of element size -
+                         # below this, gmsh runtimes and cell counts stop
+                         # being meaningful on any machine (NaN also fails)
+MESH_EST_KB_CELL = 5.0   # rough solver RAM per tet [KB], used for the soft
+                         # RAM warning on custom sizes (calibration: ultra
+                         # ~6.2M est. cells <-> ~24 GB)
 
 # --- Output -------------------------------------------------------------------
 OUT_VELOCITY = "velocity.vtu"
@@ -280,7 +298,8 @@ N_PARTICLES      = 380
 PARTICLE_MAX_AGE = 300
 INLET_SPAWN_FRAC = 0.70
 MAIN_ROWS        = 24
-MAIN_COLS_MAX    = 66
+MAIN_COLS_MAX    = 66    # scripted-worker default when --cols is absent;
+                         # the live launcher fills the real terminal width
 MINI_COLS        = 28
 FIRST_FRAME_TIMEOUT = 420    # mesh + JIT before the first frame [s]
 
@@ -309,7 +328,27 @@ ISO_HGT_MIN = 3      # min rows of extruded chassis height
 ISO_HGT_MAX = 7      # max rows of extruded chassis height (clamp)
 ISO_HGT_PER_M = 26   # rows per metre of chassis height before the clamp
 
-SYS_BAR_W  = 12      # CPU/RAM meter width in the SYSTEM widget
+# --- CFD WORKERS telemetry strip (btop-style, privacy-scoped) -----------------
+SYS_STRIP_ROWS = 6   # full-width bottom strip height, borders included:
+                     # 1 header + SYS_GRAPH_ROWS history + 1 meter line
+SYS_GRAPH_ROWS = 2   # braille history rows per metric (4 dot-levels each)
+TELEM_TREE_SEC = 2.0 # how often the mpiexec process tree is re-walked
+TELEM_USS_SEC  = 1.0 # USS cadence - smaps_rollup reads for ~40 ranks are
+                     # deliberately slower than the 0.5 s CPU sampling so
+                     # they can never stall the 12 fps render loop
+# Braille dot bitmasks: cumulative bottom-up fills (0..4 dots) per column.
+# chr(0x2800 + BRAILLE_L[i] + BRAILLE_R[j]) is a cell with the left column
+# filled i dots high and the right column j dots high ([4]+[4] = U+28FF).
+BRAILLE_L = (0x00, 0x40, 0x44, 0x46, 0x47)
+BRAILLE_R = (0x00, 0x80, 0xA0, 0xB0, 0xB8)
+
+# --- Sixel / gnuplot high-fidelity 3-D (launcher side) ------------------------
+SIXEL_ENV        = "ASCIISTREAM_SIXEL"  # "1"/"on" force, "0"/"off" disable,
+                                        # unset = DA1 terminal autodetect
+GNUPLOT_TIMEOUT  = 20.0                 # per-frame splot watchdog [s]
+CELL_PX_FALLBACK = (10, 20)             # terminal cell w,h [px] when the
+                                        # CSI 16 t query goes unanswered
+SIXEL_TOP_ROW    = 3                    # image origin row (below the header)
 
 M3S_TO_CFM = 60.0 / 0.3048**3
 
@@ -1046,12 +1085,33 @@ def build_geometry(server_cfg):
 
 
 def mesh_level_lc(server_cfg, level):
-    """Preset element size [m] for a profile. Falls back to the built-in
-    presets when the JSON predates the mesh_settings block."""
-    ms = server_cfg.get("mesh_settings") or DEFAULT_MESH_SETTINGS
-    if level not in ms:
-        raise SystemExit(f"--mesh must be one of {', '.join(ms)}")
-    return float(ms[level]["element_size_mm"]) / 1000.0
+    """Element size [m] for a profile: a preset name from mesh_settings, or
+    a literal millimetre value ("0.8") - the wizard's custom option and a
+    numeric --mesh both land here. Enforces the MESH_MM_FLOOR sanity floor
+    on EVERY source (a typo'd config or flag must not hang gmsh; the
+    `not >=` form also rejects NaN). Falls back to the built-in presets
+    when the JSON predates the mesh_settings block."""
+    try:
+        mm = float(level)
+    except (TypeError, ValueError):
+        ms = server_cfg.get("mesh_settings") or DEFAULT_MESH_SETTINGS
+        if level not in ms:
+            raise SystemExit(f"--mesh must be a preset ({', '.join(ms)}) "
+                             "or an element size in mm")
+        mm = float(ms[level]["element_size_mm"])
+    if not (mm >= MESH_MM_FLOOR):
+        raise SystemExit(f"element size {mm:g} mm is below the "
+                         f"{MESH_MM_FLOOR:g} mm floor")
+    return mm / 1000.0
+
+
+def mesh_desc(level, lc):
+    """'coarse preset' or '0.8 mm custom' - worker log + run report."""
+    try:
+        float(level)
+    except (TypeError, ValueError):
+        return f"{level} preset"
+    return f"{lc * 1000:g} mm custom"
 
 
 def est_cells(geo, lc):
@@ -1316,12 +1376,8 @@ def worker_main(args):
     fan_vz = q_op / area
 
     mesh_level = args.get("mesh") or "coarse"
-    lc = mesh_level_lc(server_cfg, mesh_level)
+    lc = mesh_level_lc(server_cfg, mesh_level)   # enforces MESH_MM_FLOOR
     n_est = est_cells(geo, lc)
-    if lc < 0.001:      # sanity floor: a typo'd config must not hang gmsh
-        raise SystemExit(f"element_size_mm={lc * 1000:g} is below the 1 mm "
-                         f"floor (~{n_est / 1e6:.0f}M cells) - fix "
-                         "mesh_settings in the config")
 
     sim_time = float(args["sim_time"])
     dt = float(args.get("dt") or SIM_DT)
@@ -1357,8 +1413,8 @@ def worker_main(args):
     if rank == 0:
         print(f" [worker] profile={args['profile']} fan={fan_cfg['display']} "
               f"ranks={comm.size} dt={dt}s steps={n_steps}")
-        print(f" [worker] mesh preset '{mesh_level}' (lc={lc * 1000:g} mm, "
-              f"~{n_est:,.0f} elements estimated)")
+        print(f" [worker] mesh {mesh_desc(mesh_level, lc)} "
+              f"(lc={lc * 1000:g} mm, ~{n_est:,.0f} elements estimated)")
         print(f" [worker] fan operating estimate: {q_op * M3S_TO_CFM:.1f} CFM "
               f"-> plane velocity {fan_vz:.2f} m/s")
 
@@ -1628,7 +1684,8 @@ def worker_main(args):
             "dz_min_at": [round(float(c), 3) for c in pts_dz[ok][j]],
             "dz_mean": float(speeds[ok].mean()),
             "components": components,
-            "mesh_level": mesh_level, "n_cells": int(n_cells),
+            "mesh_level": mesh_level,
+            "mesh_desc": mesh_desc(mesh_level, lc), "n_cells": int(n_cells),
             "ranks": comm.size,
             "sim_time": sim_time, "dt": dt,
             "wall_time": time.time() - t_wall,
@@ -2162,32 +2219,481 @@ def build_chassis_iso_panel(speed, geo, vref, max_cols, max_rows,
                  border_style="cyan", box=box.SQUARE, padding=(0, 1))
 
 
-def build_sys_panel():
-    """SYSTEM widget for the live dashboard: CPU% / RAM meters via psutil.
-    Fixed three lines so the side column never reflows; load colour runs
-    green (idle) -> yellow -> red (saturated)."""
+def _braille_rows(values, width, rows, vmax):
+    """History series -> `rows` Text lines of braille cells, newest sample
+    at the right edge: 2 samples per character column, 4 dot-levels per
+    character row (so a 2-row graph resolves 8 levels, btop-style). Each
+    character is coloured green -> yellow -> red by its own load; empty
+    cells keep the blank braille glyph so columns never collapse."""
+    n = 2 * width
+    vals = [max(0.0, float(v)) for v in list(values)[-n:]]
+    vals = [0.0] * (n - len(vals)) + vals
+    span = max(float(vmax), 1e-9)
+    hmax = 4 * rows
+    # ceil: any nonzero sample shows at least one dot
+    lv = [min(hmax, int(np.ceil(min(v / span, 1.0) * hmax))) if v > 0 else 0
+          for v in vals]
+    out = []
+    for r in range(rows):                        # top row first
+        base = 4 * (rows - 1 - r)
+        t = Text()
+        for c in range(width):
+            l0 = min(max(lv[2 * c] - base, 0), 4)
+            l1 = min(max(lv[2 * c + 1] - base, 0), 4)
+            ch = chr(0x2800 + BRAILLE_L[l0] + BRAILLE_R[l1])
+            if l0 or l1:
+                load = min(max(vals[2 * c], vals[2 * c + 1]) / span, 1.0)
+                t.append(ch, style=_hex(_status_rgb(1.0 - load)))
+            else:
+                t.append(ch, style="dim")
+        out.append(t)
+    return out
+
+
+def _braille_meter(frac, width, tail=""):
+    """btop-style meter at braille half-cell resolution: the filled bar is
+    colour-graded along its length (green base -> red tip), the unfilled
+    channel is a dark solid so the meter's full extent stays visible."""
+    frac = min(max(float(frac), 0.0), 1.0)
+    cols = int(round(frac * 2 * width))
+    t = Text()
+    for c in range(width):
+        fill = min(max(cols - 2 * c, 0), 2)
+        if fill:
+            ch = chr(0x2800 + BRAILLE_L[4] + (BRAILLE_R[4] if fill == 2
+                                              else 0))
+            t.append(ch, style=_hex(_status_rgb(1.0 - (c + 0.5) / width)))
+        else:
+            t.append(chr(0x28FF), style=_hex((58, 58, 64)))
+    t.append(tail, style="dim")
+    return t
+
+
+def _box_mem_total():
+    """MemTotal [bytes] - machine CAPACITY, not usage: the one machine-wide
+    fact the telemetry strip is allowed (it only scales the RAM meter).
+    /proc/meminfo first; psutil's total field (still capacity) as the
+    non-/proc fallback; 0 = unknown, the meter is then dropped."""
+    try:
+        with open("/proc/meminfo") as f:
+            return int(f.readline().split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    if HAVE_PSUTIL:
+        try:
+            return int(psutil.virtual_memory().total)
+        except Exception:
+            pass
+    return 0
+
+
+class WorkerTelemetry:
+    """Privacy-first telemetry for the CFD WORKERS strip.
+
+    Scope is EXACTLY the spawned solver tree: the mpiexec root plus its
+    recursive children (PRRTE/hydra daemons + the python ranks). Nothing
+    global is read - no system-wide psutil.cpu_percent (/proc/stat), no
+    virtual_memory() usage numbers; other tenants of the box are invisible
+    to this widget by construction.
+
+      RAM  = sum of per-PID USS (unique set size: pages shared with nobody
+             else, so MPI shared-memory segments and the N copies of the
+             interpreter image are not double-counted). Reads
+             /proc/<pid>/smaps_rollup via memory_full_info; falls back to
+             RSS where USS is unsupported. Refreshed every TELEM_USS_SEC
+             (slower than CPU on purpose - ~40 ranks of smaps reads must
+             never stall the render loop).
+      CPU  = sum of per-PID busy %, normalised by the AFFINITY POOL: the
+             union of hardware threads the tree is allowed to run on
+             (taskset/cpuset aware via Process.cpu_affinity), so 36
+             saturated ranks pinned to 36 of 72 threads read ~100 %, not
+             ~50 %. The summed raw % is reported alongside.
+
+    Process handles are cached per PID and only NEW pids get the priming
+    cpu_percent(None) call - psutil's busy-time delta lives on the handle,
+    so recreating handles every walk would zero every other sample and
+    sawtooth the graphs."""
+
+    def __init__(self, root_pid):
+        self._root = root_pid
+        self._procs = {}                     # pid -> cached psutil.Process
+        self._walked = -1e9
+        self._uss_at = -1e9
+        self._uss = 0
+        self._ever = False                   # tree observed alive once
+
+    def _walk(self, now):
+        if now - self._walked < TELEM_TREE_SEC:
+            return
+        self._walked = now
+        found = {}
+        try:
+            root = psutil.Process(self._root)
+            for p in [root] + root.children(recursive=True):
+                found[p.pid] = self._procs.get(p.pid, p)
+        except psutil.Error:
+            found = {}
+        for pid, p in found.items():
+            if pid not in self._procs:
+                try:
+                    p.cpu_percent(None)      # prime the new arrival
+                except psutil.Error:
+                    pass
+        self._procs = found
+
+    def sample(self):
+        """One strip sample: dict(alive, ever, n_procs, cpu_raw [summed %],
+        pool [thread count], cpu_pool [0..1 of the pool], uss [bytes])."""
+        now = time.monotonic()
+        self._walk(now)
+        cpu_raw, pool, alive = 0.0, set(), 0
+        want_uss = now - self._uss_at >= TELEM_USS_SEC
+        uss = 0
+        for p in list(self._procs.values()):
+            try:
+                with p.oneshot():
+                    cpu_raw += p.cpu_percent(None)
+                    try:
+                        pool.update(p.cpu_affinity())
+                    except (psutil.Error, AttributeError, OSError):
+                        pass
+                    if want_uss:
+                        try:
+                            uss += p.memory_full_info().uss
+                        except (psutil.Error, AttributeError):
+                            uss += p.memory_info().rss
+                alive += 1
+            except psutil.Error:
+                self._procs.pop(p.pid, None)
+        if want_uss and alive:
+            self._uss_at, self._uss = now, uss
+        n_pool = len(pool) or (os.cpu_count() or 1)
+        self._ever = self._ever or alive > 0
+        return {"alive": alive > 0, "ever": self._ever, "n_procs": alive,
+                "cpu_raw": cpu_raw, "pool": n_pool,
+                "cpu_pool": cpu_raw / (100.0 * n_pool), "uss": self._uss}
+
+
+def build_sys_panel(sample, cpu_hist, ram_hist, mem_total, width):
+    """CFD WORKERS strip: full-width btop-style braille graphs + meters for
+    the solver tree only (WorkerTelemetry). CPU graphs on a fixed 0..100 %
+    -of-pool scale; the RAM graph autoscales to its own peak while the RAM
+    meter shows the fraction of the box's MemTotal (capacity constant)."""
     if not HAVE_PSUTIL:
-        return Panel(Text("psutil not available\n(pip install psutil)",
-                          style="dim"), title="SYSTEM", border_style="cyan",
+        return Panel(Text("psutil not available (pip install psutil) - "
+                          "worker telemetry disabled", style="dim"),
+                     title="CFD WORKERS", border_style="cyan",
                      box=box.SQUARE, padding=(0, 1))
-    cpu = psutil.cpu_percent(interval=None)
-    vm = psutil.virtual_memory()
+    if sample is None or not sample["ever"]:
+        return Panel(Text("waiting for the worker pool...", style="dim"),
+                     title="CFD WORKERS", border_style="cyan",
+                     box=box.SQUARE, padding=(0, 1))
 
-    def meter(label, frac, tail):
-        frac = min(max(frac, 0.0), 1.0)
-        n = int(round(frac * SYS_BAR_W))
-        t = Text(label, style="bold")
-        t.append("█" * n, style=_hex(_status_rgb(1.0 - frac)))
-        t.append("░" * (SYS_BAR_W - n), style="dim")
-        t.append(tail, style="dim")
-        return t
+    half = max(24, (width - 10) // 2)
+    gw = max(10, half - 2)                   # graph width [chars]
+    mw = max(10, half - 26)                  # meter width [chars]
 
-    return Panel(Group(
-        meter("CPU ", cpu / 100.0, f" {cpu:3.0f}%"),
-        meter("RAM ", vm.percent / 100.0, f" {vm.percent:3.0f}%"),
-        Text(f"    {vm.used / 2**30:.1f} / {vm.total / 2**30:.1f} GB used",
-             style="dim")),
-        title="SYSTEM", border_style="cyan", box=box.SQUARE, padding=(0, 1))
+    cpu_t = min(max(sample["cpu_pool"], 0.0), 1.0)
+    head_c = Text("CPU ", style="bold")
+    head_c.append(f"{100.0 * sample['cpu_pool']:5.1f}%",
+                  style="bold " + _hex(_status_rgb(1.0 - cpu_t)))
+    head_c.append(f" of {sample['pool']}-thread affinity pool", style="dim")
+    if not sample["alive"]:
+        head_c.append("  [pool exited]", style="yellow")
+    meter_c = _braille_meter(cpu_t, mw,
+                             f" {sample['cpu_raw']:6.0f}% raw over "
+                             f"{sample['n_procs']} procs")
+
+    ram_frac = sample["uss"] / mem_total if mem_total else 0.0
+    head_r = Text("RAM ", style="bold")
+    head_r.append(f"{sample['uss'] / 2**30:6.2f} GiB",
+                  style="bold " + _hex(_status_rgb(1.0 - ram_frac)))
+    head_r.append(" USS, worker tree only", style="dim")
+    peak = max([v for v in ram_hist] or [0.0])
+    meter_r = _braille_meter(ram_frac, mw,
+                             f" {100.0 * ram_frac:5.1f}% of "
+                             f"{mem_total / 2**30:.0f} GiB box"
+                             if mem_total else " box MemTotal unknown")
+
+    grid = Table.grid(expand=True, padding=(0, 2))
+    grid.add_column(ratio=1)
+    grid.add_column(ratio=1)
+    grid.add_row(head_c, head_r)
+    gc = _braille_rows(cpu_hist, gw, SYS_GRAPH_ROWS, 1.0)
+    gr = _braille_rows(ram_hist, gw, SYS_GRAPH_ROWS, max(peak * 1.15, 1e-9))
+    for i in range(SYS_GRAPH_ROWS):
+        grid.add_row(gc[i], gr[i])
+    grid.add_row(meter_c, meter_r)
+    return Panel(grid, title="CFD WORKERS (process-scoped telemetry)",
+                 border_style="cyan", box=box.SQUARE, padding=(0, 1))
+
+
+# ==============================================================================
+#  SIXEL / GNUPLOT HIGH-FIDELITY 3-D PIPELINE (launcher side)
+#  Streamed mid-height fields -> temp .dat -> gnuplot `splot` through the
+#  sixelgd terminal -> raster blit into the main pane. rich cannot host a
+#  sixel blob (Live's diff repaints erase raster output every tick), so the
+#  sixel view suspends Live and owns the screen with cursor addressing.
+# ==============================================================================
+
+def _tty_query(seq, end_byte, timeout=0.35):
+    """Write an escape query to the controlling terminal and read the reply
+    (cbreak) until `end_byte` or timeout; b"" when there is no TTY or no
+    answer. MUST run before the key-watcher thread owns stdin, or the
+    reply gets eaten as keystrokes."""
+    try:
+        import select
+        import termios
+        import tty
+    except ImportError:
+        return b""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return b""
+    fd = sys.stdin.fileno()
+    try:
+        old = termios.tcgetattr(fd)
+    except (termios.error, OSError):
+        return b""
+    buf = b""
+    try:
+        tty.setcbreak(fd)
+        sys.stdout.write(seq)
+        sys.stdout.flush()
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and buf[-1:] != end_byte:
+            r, _, _ = select.select(
+                [fd], [], [], max(deadline - time.monotonic(), 0.01))
+            if not r:
+                break
+            chunk = os.read(fd, 64)
+            if not chunk:
+                break
+            buf += chunk
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    return buf
+
+
+def parse_da1_sixel(reply):
+    """True when a DA1 reply (ESC[?<attrs>c) lists feature 4 = sixel
+    graphics. Token-exact: '14' or '22' must not count as '4'."""
+    m = re.search(rb"\[\?([0-9;]+)c", reply)
+    return bool(m) and b"4" in m.group(1).split(b";")
+
+
+def detect_sixel(console):
+    """(ok, why): ASCIISTREAM_SIXEL override first, DA1 autodetect second.
+    tmux/screen swallow both the query and sixel itself unless passthrough
+    is configured - they land in the clean fallback here."""
+    env = os.environ.get(SIXEL_ENV, "").strip().lower()
+    if env in ("0", "off", "no"):
+        return False, f"disabled via {SIXEL_ENV}"
+    if env in ("1", "on", "yes"):
+        return True, f"forced via {SIXEL_ENV}"
+    if not console.is_terminal:
+        return False, "not a terminal"
+    if parse_da1_sixel(_tty_query("\x1b[c", b"c")):
+        return True, "terminal advertises sixel (DA1 feature 4)"
+    return False, "terminal does not advertise sixel (DA1)"
+
+
+def detect_cell_px():
+    """Character cell size [px] via CSI 16 t (reply ESC[6;h;w t) so the
+    image can be sized to the pane; CELL_PX_FALLBACK when unanswered."""
+    m = re.search(rb"\[6;(\d+);(\d+)t", _tty_query("\x1b[16t", b"t"))
+    if m:
+        ch, cw = int(m.group(1)), int(m.group(2))
+        if 4 <= cw <= 40 and 6 <= ch <= 80:
+            return cw, ch
+    return CELL_PX_FALLBACK
+
+
+def ensure_gnuplot(console):
+    """gnuplot with the sixelgd terminal. The dolfinx container ships
+    without it, so first use apt-installs gnuplot-nox (root container,
+    overlaps the worker's mesh+JIT wait). False = stay on the fallback."""
+    def has_sixelgd():
+        # stdin MUST be cut off: with the launcher's pty as stdin gnuplot
+        # believes it is interactive, and `set terminal` then PAGES its
+        # list and blocks on a keypress until the timeout kills it - which
+        # silently disabled sixel on every real terminal while passing
+        # every pipe-fed test. GPVAL_TERMINALS never pages, on top.
+        try:
+            r = subprocess.run(["gnuplot", "-e", "print GPVAL_TERMINALS"],
+                               capture_output=True, timeout=10,
+                               stdin=subprocess.DEVNULL)
+            return b"sixelgd" in r.stdout + r.stderr
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
+    if shutil.which("gnuplot"):
+        return has_sixelgd()
+    apt = shutil.which("apt-get")
+    if apt and os.geteuid() == 0:
+        console.print(" [dim][setup] installing gnuplot for the sixel 3-D "
+                      "view (first run in this container)...[/dim]")
+        try:                       # DEVNULL: apt/dpkg must never find a
+            subprocess.run([apt, "update", "-qq"], capture_output=True,
+                           timeout=180, stdin=subprocess.DEVNULL)
+            subprocess.run([apt, "install", "-y", "-qq", "gnuplot-nox"],
+                           capture_output=True, timeout=180,
+                           stdin=subprocess.DEVNULL)   # tty to prompt on
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return bool(shutil.which("gnuplot")) and has_sixelgd()
+    return False
+
+
+def write_field_dat(path, press, speed, dims):
+    """Dump the streamed mid-height matrices as a gnuplot grid file with
+    PHYSICAL coordinates: 'x z P |u|' rows, a blank line between
+    x-scanlines, solids as literal nan (set datafile missing)."""
+    W, _h, L = dims
+    rows, cols = press.shape
+    xs = (np.arange(rows) + 0.5) * (W / rows)
+    zs = (np.arange(cols) + 0.5) * (L / cols)
+    with open(path, "w") as f:
+        f.write("# x[m] z[m] P[Pa] speed[m/s]\n")
+        for i in range(rows):
+            for j in range(cols):
+                f.write(f"{xs[i]:.4f} {zs[j]:.4f} "
+                        f"{press[i, j]:.3f} {speed[i, j]:.3f}\n")
+            f.write("\n")
+
+
+def gnuplot_script(dat_path, out_path, px_w, px_h, title):
+    """splot script: height = pressure, colour = |u| through the same
+    palette as the ASCII views (CFD_CMAP_STOPS), dark theme to match the
+    dashboard. Background lives in the terminal spec - gnuplot 6 has no
+    standalone `set background`."""
+    pal = ", ".join(f"{t:g} '{_hex(c)}'" for t, c in CFD_CMAP_STOPS)
+    title = title.replace("'", "")
+    return (
+        f"set terminal sixelgd size {px_w},{px_h} background '#101014'\n"
+        f"set output '{out_path}'\n"
+        "set datafile missing 'nan'\n"
+        f"set palette defined ({pal})\n"
+        "set border lc rgb '#9696a0'\n"
+        "set tics textcolor rgb '#9696a0' font ',9'\n"
+        "set xlabel 'z - length [m]' textcolor rgb '#9696a0'\n"
+        "set ylabel 'x - width [m]' textcolor rgb '#9696a0'\n"
+        "set zlabel 'P [Pa]' textcolor rgb '#c8c8d0' rotate parallel\n"
+        "set cblabel '|u| [m/s]' textcolor rgb '#c8c8d0'\n"
+        f"set title '{title}' textcolor rgb 'white' font ',11'\n"
+        "set view 55, 205\n"
+        "set pm3d depthorder border lc rgb '#26262c' lw 0.3\n"
+        "set key off\n"
+        f"splot '{dat_path}' using 2:1:3:4 with pm3d\n")
+
+
+def render_sixel_frame(workdir, press, speed, dims, px, title):
+    """One frame: .dat + .gp -> `gnuplot` subprocess -> sixel string, with
+    gnuplot's leading cursor-home ESC[H STRIPPED (verified: sixelgd
+    prefixes it, which would yank every frame to the screen origin instead
+    of our pane). None on any failure - the caller falls back."""
+    dat = os.path.join(workdir, "field.dat")
+    gp = os.path.join(workdir, "frame.gp")
+    out = os.path.join(workdir, "frame.six")
+    write_field_dat(dat, press, speed, dims)
+    with open(gp, "w") as f:
+        f.write(gnuplot_script(dat, out, px[0], px[1], title))
+    try:
+        r = subprocess.run(["gnuplot", gp], capture_output=True,
+                           timeout=GNUPLOT_TIMEOUT,
+                           stdin=subprocess.DEVNULL)  # never the pty: any
+        if r.returncode != 0:                         # pager = frame hang
+            return None
+        with open(out, "rb") as f:
+            six = f.read()
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    start = six.find(b"\x1bP")               # DCS starts the real payload
+    if start < 0 or not six.rstrip().endswith(b"\x1b\\"):
+        return None
+    return six[start:].decode("latin-1")
+
+
+def _paint_at(console, row, col, renderable, width):
+    """Paint a rich renderable at an absolute screen position (used while
+    Live is suspended in sixel mode). Returns the painted line count."""
+    with console.capture() as cap:
+        console.print(renderable, width=width)
+    lines = cap.get().splitlines()
+    out = sys.stdout
+    for i, line in enumerate(lines):
+        out.write(f"\x1b[{row + i};{col}H{line}")
+    out.flush()
+    return len(lines)
+
+
+def run_sixel_view(console, scene, poll_frame, done_evt, telem, cpu_hist,
+                   ram_hist, mem_total, cell_px, workdir, dims):
+    """The [v] high-fidelity mode. rich Live is suspended by the caller;
+    this loop owns the screen: gnuplot sixel raster in the main pane
+    (re-rendered only when a NEW field frame arrives), FRONT/REAR minis
+    painted to the right, the CFD WORKERS strip at the bottom on its own
+    0.5 s cadence. Returns 'top' (user toggled back), 'done' (run over)
+    or 'failed' (a frame was rejected - caller disables sixel for the
+    session and the spec fallback is the 2-D top-down view)."""
+    out = sys.stdout
+    w, h = console.width, console.height
+    side_col = max(42, w - MINI_COLS - 4)
+    strip_row = max(SIXEL_TOP_ROW + 6, h - SYS_STRIP_ROWS + 1)
+    img_px = (max(280, (side_col - 3) * cell_px[0]),
+              max(180, (strip_row - SIXEL_TOP_ROW - 1) * cell_px[1]))
+    console.clear()
+    out.write("\x1b[?25l")                   # cursor off while we paint
+    seen = -1
+    sys_at = 0.0
+    status = "top"
+    try:
+        while True:
+            poll_frame()
+            if scene["view"] != "iso":
+                break
+            st = scene["status"]
+            head = Text()
+            head.append(" ASCIISTREAM 3-D ", style="bold cyan")
+            head.append("gnuplot splot -> sixel | mid-height P surface, "
+                        "colour = |u| | ", style="dim")
+            head.append(f"t={st['t']:.1f}/{st['t_total']:.0f}s "
+                        f"step {st['step']}/{st['steps']} | ", style="dim")
+            head.append("[v]", style="bold")
+            head.append(" 2-D view | Ctrl+C stops", style="dim")
+            _paint_at(console, 1, 1, head, w - 1)
+            if scene.get("press") is not None and scene["frame_no"] != seen:
+                seen = scene["frame_no"]
+                six = render_sixel_frame(
+                    workdir, scene["press"], scene["speed_arr"], dims,
+                    img_px, f"{scene['display_name']} - t={st['t']:.1f} s")
+                if six is None:
+                    status = "failed"
+                    break
+                scene["six_final"] = six
+                out.write(f"\x1b[{SIXEL_TOP_ROW};1H")
+                out.write(six)
+                out.flush()
+                if scene["front_panel"] is not None:
+                    n = _paint_at(console, SIXEL_TOP_ROW, side_col,
+                                  scene["front_panel"], MINI_COLS + 2)
+                    _paint_at(console, SIXEL_TOP_ROW + n, side_col,
+                              scene["rear_panel"], MINI_COLS + 2)
+            now = time.monotonic()
+            if telem and now - sys_at >= 0.5:
+                sys_at = now
+                smp = telem.sample()
+                cpu_hist.append(smp["cpu_pool"])
+                ram_hist.append(smp["uss"])
+                _paint_at(console, strip_row, 1, build_sys_panel(
+                    smp, cpu_hist, ram_hist, mem_total, w - 1), w - 1)
+            if done_evt.is_set():
+                status = "done"
+                break
+            time.sleep(0.2)
+    finally:
+        out.write("\x1b[?25h")               # cursor back on, always
+        out.flush()
+    return status
 
 
 def build_legend():
@@ -2207,7 +2713,7 @@ def build_legend():
     t.append("| 2-D mid-plane streaklines | live transient field | ",
              style="dim")
     t.append("[v]", style="bold")
-    t.append(" 3-D chassis view | Ctrl+C stops", style="dim")
+    t.append(" 3-D view | Ctrl+C stops", style="dim")
     return t
 
 
@@ -2329,7 +2835,8 @@ def write_report(server_cfg, params, fan_cfg, summary, comp_rows, fails,
     rc.print(f"server   : {server_cfg['display_name']} "
              f"[{params['profile']}, {server_cfg['form_factor']}]")
     rc.print(f"fan      : {fan_cfg['display']} x {server_cfg['fan_count']}")
-    rc.print(f"mesh     : {summary.get('mesh_level', '?')} preset, "
+    rc.print(f"mesh     : "
+             f"{summary.get('mesh_desc', summary.get('mesh_level', '?'))}, "
              f"{summary.get('n_cells', 0):,} elements, "
              f"{summary.get('ranks', '?')} MPI ranks")
     rc.print(f"simulated: {summary['sim_time']:.1f} s @ "
@@ -2415,7 +2922,7 @@ def launcher_wizard(console, cfg, config_path):
     console.clear()
     render_banner(console)
     console.print(Panel.fit(
-        "[bold cyan]ASCIISTREAM[/]  [dim]v5 - terminal CFD for server "
+        "[bold cyan]ASCIISTREAM[/]  [dim]v0.7 - terminal CFD for server "
         "chassis[/]\n"
         "[white]Transient Navier-Stokes (incremental pressure-correction) on "
         "MPI workers[/]\n"
@@ -2546,10 +3053,12 @@ def launcher_wizard(console, cfg, config_path):
         fan = fans[int(fsel) - 1]
 
     n_host = os.cpu_count() or 4
-    max_cores = max(MAX_UI_CORES, n_host)
-    cores = IntPrompt.ask(f"  Total CPU cores to allocate (1-{max_cores})",
-                          default=min(4, max_cores), console=console)
-    cores = max(1, min(cores, max_cores))
+    # no ceiling: any integer goes straight to `mpiexec -n` (36-core boxes
+    # should not be argued with); floor of 1 is the only clamp
+    cores = IntPrompt.ask("  MPI ranks / CPU threads to allocate "
+                          f"(no cap - this machine reports {n_host})",
+                          default=n_host, console=console)
+    cores = max(1, int(cores))
     if cores > n_host:
         console.print(f"    [yellow]note:[/] oversubscribing - this machine "
                       f"reports {n_host} hardware threads; Open MPI's "
@@ -2584,28 +3093,46 @@ def launcher_wizard(console, cfg, config_path):
                       f"({mm:g}mm) - Est. RAM: "
                       f"{MESH_RAM_NOTES.get(lv, 'n/a')}",
                       markup=False, highlight=False)
+    custom_i = len(levels) + 1
+    console.print(f"[{custom_i}] Custom element size - any value down to "
+                  f"{MESH_MM_FLOOR:g}mm (sub-millimetre needs a massive "
+                  "RAM pool)", markup=False, highlight=False)
     console.print("  [dim]note: heatsinks stay homogenized porous blocks at "
                   "every preset - finer meshes sharpen jets and wakes, they "
                   "do not add fin geometry.[/]")
     msel = Prompt.ask("  Select mesh resolution",
-                      choices=[str(i) for i in range(1, len(levels) + 1)],
+                      choices=[str(i) for i in range(1, custom_i + 1)],
                       default="1", console=console)
-    mesh_level = levels[int(msel) - 1]
-    # Stage 3 STRICT gate: ultra is offered to everyone, but selecting it
-    # on a machine under 32 GB raises MemoryError and the script dies with
-    # the traceback - deliberately unhandled, per spec
-    enforce_ultra_ram(mesh_level)
-    mesh_mm = float(ms[mesh_level]["element_size_mm"])
+    if int(msel) == custom_i:
+        mesh_mm = FloatPrompt.ask(
+            f"    Element size [mm] ({MESH_MM_FLOOR:g}-35)", default=1.0,
+            console=console)
+        if not (MESH_MM_FLOOR <= mesh_mm <= 35.0):
+            mesh_mm = min(max(mesh_mm, MESH_MM_FLOOR), 35.0)
+            console.print(f"    [yellow]note:[/] element size clamped to "
+                          f"{mesh_mm:g} mm.")
+        # transported to the workers as the literal value ("0.8") - the
+        # numeric branch of mesh_level_lc picks it up on their side
+        mesh_level, mesh_arg = "custom", f"{mesh_mm:g}"
+    else:
+        mesh_level = levels[int(msel) - 1]
+        mesh_arg = mesh_level
+        # Stage 3 STRICT gate: ultra is offered to everyone, but selecting
+        # it on a machine under 32 GB raises MemoryError and the script
+        # dies with the traceback - deliberately unhandled, per spec
+        enforce_ultra_ram(mesh_level)
+        mesh_mm = float(ms[mesh_level]["element_size_mm"])
     n_est = est_cells(build_geometry(s), mesh_mm / 1000.0)
     if mesh_level != "ultra":               # soft confirm for the rest
         try:                                # container-visible MemTotal check
             with open("/proc/meminfo") as f:
                 total_gb = int(f.readline().split()[1]) / 1024**2
-            need = MESH_RAM_HIGH_GB.get(mesh_level, 0)
+            need = (MESH_RAM_HIGH_GB.get(mesh_level)
+                    or n_est * MESH_EST_KB_CELL / 2**20)
             if need > 0.8 * total_gb:
-                console.print(f"    [bold red]RAM warning:[/] this preset "
-                              f"may need ~{need} GB; this machine reports "
-                              f"{total_gb:.0f} GB total.")
+                console.print(f"    [bold red]RAM warning:[/] this mesh "
+                              f"may need ~{need:,.0f} GB; this machine "
+                              f"reports {total_gb:.0f} GB total.")
                 if not Confirm.ask("    Continue anyway?", default=False,
                                    console=console):
                     console.print("  [yellow]Aborted.[/]")
@@ -2623,7 +3150,7 @@ def launcher_wizard(console, cfg, config_path):
     summary.add_row("Simulated time", f"{sim_time:.1f} s @ dt={dt:g}s "
                     f"({int(round(sim_time / dt))} steps)")
     summary.add_row("Mesh resolution",
-                    f"{MESH_LEVEL_LABEL.get(mesh_level, mesh_level)} "
+                    f"{MESH_LEVEL_LABEL.get(mesh_level, mesh_level.title())} "
                     f"({mesh_mm:g} mm, ~{n_est:,.0f} elements est.)")
     summary.add_row("Heat load", f"{s['heat_load']:.0f} W")
     if hw.get("drive_type"):
@@ -2645,7 +3172,7 @@ def launcher_wizard(console, cfg, config_path):
     return {"profile": profile, "profile_runtime": s, "hw": hw,
             "fan": fan, "fan_custom": fan_custom,
             "cores": cores, "sim_time": sim_time, "dt": dt,
-            "mesh": mesh_level}
+            "mesh": mesh_arg}
 
 
 def detect_mpi_flags():
@@ -2692,7 +3219,10 @@ def launcher_main(config_path):
     with os.fdopen(fd, "w") as f:
         json.dump(run_cfg, f)
     geo = build_geometry(server_cfg)
-    ncols = int(np.clip(console.width - MINI_COLS - 12, 40, MAIN_COLS_MAX))
+    # fill the terminal: the main pane takes every column the fixed-width
+    # side stack leaves behind - no artificial cap, 16:9 monitors get the
+    # whole width (the worker samples its field grid at exactly this size)
+    ncols = max(40, console.width - MINI_COLS - 12)
 
     # socket server first, then spawn the MPI worker pool pointing back at it
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -2709,11 +3239,23 @@ def launcher_main(config_path):
     if params["fan_custom"]:
         cmd += ["--fan-cfm", str(params["fan_custom"]["max_cfm"]),
                 "--fan-mmh2o", str(params["fan_custom"]["max_mmh2o"])]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+    # stdin=DEVNULL is load-bearing three ways: PRRTE's stdin forwarder
+    # otherwise reads the launcher's pty and (1) races the [v] key watcher
+    # for keystrokes, (2) eats the DA1/cell-size query replies during
+    # sixel detection, (3) can trip tty job-control stops under synthetic
+    # ptys. The workers never read stdin - argv + callback socket only.
+    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True)
     err_tail = deque(maxlen=30)
     threading.Thread(target=lambda: [err_tail.append(l) for l in proc.stderr],
                      daemon=True).start()
+
+    # privacy-scoped telemetry: the widget watches THIS process tree only
+    telem = WorkerTelemetry(proc.pid) if HAVE_PSUTIL else None
+    mem_total = _box_mem_total() if HAVE_PSUTIL else 0
+    cpu_hist = deque(maxlen=1024)     # pool-fraction samples, 0.5 s apart
+    ram_hist = deque(maxlen=1024)     # summed-USS samples [bytes]
     out_tail = deque(maxlen=30)
     threading.Thread(target=lambda: [out_tail.append(l) for l in proc.stdout],
                      daemon=True).start()
@@ -2759,6 +3301,11 @@ def launcher_main(config_path):
         vref = max(header["fan_vz"], 1e-6)
         scene["particles"].update_fields(arrays["ux"], arrays["uz"],
                                          arrays["speed"], vref)
+        # raw fields + a frame counter for the sixel pipeline (it re-runs
+        # gnuplot only when a genuinely new frame arrived)
+        scene["press"] = arrays.get("press")
+        scene["speed_arr"] = arrays["speed"]
+        scene["frame_no"] = scene.get("frame_no", 0) + 1
         scene["status"] = {"t": header["t"], "t_total": params["sim_time"],
                            "step": header["step"], "steps": header["steps"],
                            "q_out": header["q_out"],
@@ -2787,6 +3334,9 @@ def launcher_main(config_path):
     # state is restored (and the thread joined) before any post-run prompt.
     keys_stop = threading.Event()
     key_thr = None
+    sixel_ok, sixel_why = False, "not a terminal"
+    cell_px = CELL_PX_FALLBACK
+    sixel_dir = None
 
     def key_watcher():
         try:
@@ -2825,43 +3375,95 @@ def launcher_main(config_path):
                 console.print(scene["front_panel"])
                 console.print(scene["rear_panel"])
         else:
+            # sixel capability first - the DA1/cell-size queries read raw
+            # replies off stdin, so they MUST precede the key watcher
+            sixel_ok, sixel_why = detect_sixel(console)
+            if sixel_ok and not ensure_gnuplot(console):
+                sixel_ok, sixel_why = False, "gnuplot with sixelgd " \
+                                             "unavailable"
+            if sixel_ok:
+                cell_px = detect_cell_px()
+                sixel_dir = tempfile.mkdtemp(prefix="asciistream_six_")
+            else:
+                console.print(f" [dim]3-D view: sixel off ({sixel_why}) - "
+                              "[v] falls back to the 2-D top-down view[/]")
             if sys.stdin.isatty():
                 key_thr = threading.Thread(target=key_watcher, daemon=True)
                 key_thr.start()
-            if HAVE_PSUTIL:
-                psutil.cpu_percent(interval=None)   # prime the delta counter
+            if telem:
+                telem.sample()      # prime the per-process delta counters
+            # btop-style frame: flow panes on top, a full-width telemetry
+            # strip along the bottom; the side stack is FIXED width so the
+            # main pane absorbs all remaining columns (no dead space)
             layout = Layout()
-            layout.split_row(Layout(name="main", ratio=3),
-                             Layout(name="side", ratio=1))
+            layout.split_column(Layout(name="body", ratio=1),
+                                Layout(name="system", size=SYS_STRIP_ROWS))
+            layout["body"].split_row(Layout(name="main", ratio=1),
+                                     Layout(name="side",
+                                            size=MINI_COLS + 4))
             layout["side"].split_column(Layout(name="front"),
-                                        Layout(name="rear"),
-                                        Layout(name="sys", size=5))
+                                        Layout(name="rear"))
             wait = Panel("waiting for first field frame...",
                          border_style="yellow")
             layout["main"].update(wait)
             layout["front"].update(wait)
             layout["rear"].update(wait)
-            layout["sys"].update(build_sys_panel())
+            layout["system"].update(build_sys_panel(
+                None, cpu_hist, ram_hist, mem_total, console.width))
             sys_at = 0.0
             with Live(layout, console=console, refresh_per_second=ANIM_FPS,
-                      screen=False):
+                      screen=False) as live:
                 while not state["done"].is_set() or poll_frame():
                     got = poll_frame()
                     if scene["front_panel"] is not None:
                         scene["particles"].step()
-                        if scene["view"] == "iso" and scene["iso_panel"]:
-                            layout["main"].update(Group(scene["iso_panel"],
-                                                        build_legend()))
-                        else:
-                            layout["main"].update(
-                                Group(build_main_panel(scene), build_legend()))
+                        if scene["view"] == "iso":
+                            if sixel_ok:
+                                # a raster image and a diff-repainting Live
+                                # cannot share the screen - suspend Live for
+                                # the sixel mode, resume when it returns
+                                live.stop()
+                                try:
+                                    res = run_sixel_view(
+                                        console, scene, poll_frame,
+                                        state["done"], telem, cpu_hist,
+                                        ram_hist, mem_total, cell_px,
+                                        sixel_dir, geo["dims"])
+                                finally:
+                                    console.clear()
+                                    live.start(refresh=True)
+                                if res == "failed":
+                                    sixel_ok = False
+                                    console.print(
+                                        " [yellow]sixel frame rejected - "
+                                        "falling back to the 2-D top-down "
+                                        "view for this run[/]")
+                                if res == "done":
+                                    break
+                                scene["view"] = "top"
+                            else:
+                                scene["view"] = "top"   # spec fallback: 2-D
+                                if not scene.get("six_note"):
+                                    scene["six_note"] = True
+                                    console.print(
+                                        f" [yellow]3-D view needs sixel - "
+                                        f"{sixel_why}; staying on the 2-D "
+                                        f"top-down view ({SIXEL_ENV}=1 "
+                                        "forces it on)[/]")
+                        layout["main"].update(
+                            Group(build_main_panel(scene), build_legend()))
                         if got:
                             layout["front"].update(scene["front_panel"])
                             layout["rear"].update(scene["rear_panel"])
                     now = time.monotonic()
-                    if now - sys_at >= 0.5:      # live CPU/RAM widget
+                    if telem and now - sys_at >= 0.5:   # telemetry strip
                         sys_at = now
-                        layout["sys"].update(build_sys_panel())
+                        smp = telem.sample()
+                        cpu_hist.append(smp["cpu_pool"])
+                        ram_hist.append(smp["uss"])
+                        layout["system"].update(build_sys_panel(
+                            smp, cpu_hist, ram_hist, mem_total,
+                            console.width))
                     time.sleep(1.0 / ANIM_FPS)
     except KeyboardInterrupt:
         console.print("\n [yellow]dashboard stopped - terminating worker[/]")
@@ -2870,13 +3472,19 @@ def launcher_main(config_path):
         keys_stop.set()
         if key_thr is not None:
             key_thr.join(timeout=1.0)
+        if sixel_dir:                 # scratch .dat/.gp/.six files; the
+            shutil.rmtree(sixel_dir,  # final frame lives in scene memory
+                          ignore_errors=True)
 
     proc.wait(timeout=60)
     if state["summary"]:
         summary = state["summary"]
         fan_cfg = params["fan_custom"] or cfg["fans"][params["fan"]]
         console.print()
-        if scene["iso_panel"]:      # final 3-D chassis view
+        if scene.get("six_final"):  # final high-fidelity frame (sixel) -
+            sys.stdout.write(scene["six_final"] + "\n")   # keepsake in the
+            sys.stdout.flush()                            # scrollback
+        elif scene["iso_panel"]:    # final 3-D chassis view (ASCII)
             console.print(scene["iso_panel"])
         console.print(requirements_table(server_cfg["requirements"], summary,
                                          server_cfg["heat_load"]))
