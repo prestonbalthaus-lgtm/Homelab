@@ -4,8 +4,8 @@
  ASCIISTREAM v5 - terminal CFD for server chassis (launcher/worker + live TUI)
  parametric gmsh meshing from server_configs.json + FEniCSx/dolfinx transient
  incremental pressure-correction (Chorin/IPCS family) + MPI worker pool +
- socket-streamed live ASCII particle dashboard and isometric 3-D pressure
- wireframe (rich), with a psutil CPU/RAM widget
+ socket-streamed live ASCII particle dashboard and a CAD-style isometric
+ 3-D chassis view (rich), with a psutil CPU/RAM widget
 ================================================================================
 
  ARCHITECTURE (Launcher-Worker)
@@ -14,12 +14,22 @@
        or gmsh, so it carries no MPI state and can safely spawn the workers.
      - reads server_configs.json (auto-written with the built-in example on
        first run), boots with the ASCIISTREAM banner (CFD-colormap gradient)
-       and asks: target server profile, fan model (a config fan OR "Custom
-       fan" with user-entered max CFM / max mmH2O), MPI ranks (up to 16,
-       oversubscription supported), simulated time span, the time step dt,
-       and the MESH RESOLUTION preset (with explicit RAM guidance per level
-       and a MemTotal safeguard that asks for confirmation when the preset
-       likely exceeds this machine); then opens a localhost TCP socket and
+       and asks: target server profile (or "Custom Server Configuration" -
+       type a name; unknown names append a generic-2U template to the JSON
+       and are then modeled), the HARDWARE prompts (drive type 2.5in
+       NVMe/SAS vs 3.5in HDD -> drive-cage impedance factor; total system
+       wattage; ambient intake and desired exhaust temperature; GPU
+       presence with count + wattage -> meshed PCIe cards + heat load; NIC
+       presence -> one more populated slot), fan model (a config fan OR
+       "Custom fan" with user-entered max CFM / max mmH2O), MPI ranks (up
+       to 16, oversubscription supported), simulated time span, the time
+       step dt, and the MESH RESOLUTION preset (RAM guidance per level; a
+       MemTotal safeguard asks for confirmation - EXCEPT "ultra", which on
+       a machine under 32 GB raises an unhandled MemoryError and crashes,
+       by design). Hardware answers are RUNTIME overrides carried to the
+       workers in a temp overlay config - the JSON on disk is not edited
+       (only new custom-server templates are appended). Then it opens a
+       localhost TCP socket and
        spawns:  mpiexec [openmpi flags] -n {cores} python3 chassis_cfd.py
                   --worker --profile K --fan K --sim-time T --dt DT
                   --mesh L --callback-port P
@@ -70,10 +80,13 @@
                          zeta (over the zone z-length) + permeability (GPU
                          heatsinks, optics cages, filters, line-card bays).
                          Optional label (canvas text) + telemetry kind
-                         ("cpu"/"gpu"/"optics") joining the thermal checks.
-                         Zones may sit on either side of the fan wall but
-                         must not straddle it or overlap another porous/
-                         solid box (validated; touching faces are fine).
+                         ("cpu"/"gpu"/"optics") joining the thermal checks;
+                         optional fan_rpm + fan_size_mm mark a zone that
+                         carries its own fan (PSUs) - drawn as the gold fan
+                         marker in the views, not solved as a momentum
+                         source. Zones may sit on either side of the fan
+                         wall but must not straddle it or overlap another
+                         porous/solid box (validated; touching faces fine).
      - optics_zone_z   : moves the optics telemetry slab off the default
                          rear-I/O position (switches: the front cage)
      - fan wall        : velocity plane at fan_wall_z, imposed on TWO
@@ -138,13 +151,14 @@
    in the mid-height (u_x,u_z) plane - 2-D streaklines of that slice, not
    3-D pathlines. The status line shows simulated time, step, live outlet
    flow and cell count.
-   Pressing [v] (or 2/3) toggles the main pane to the 3-D VIEW: an
-   isometric ASCII/Unicode wireframe of the mid-height pressure surface
-   P(x,z) - pressure normalised to surface relief inside a perspective
-   footprint box, segments coloured with the CFD colormap (blue = low P ->
-   red = high P), holes where solid components sit, fan wall ticked in
-   yellow. The final 3-D pressure topology is printed after the run and
-   included in the text report alongside the top-down slice.
+   Pressing [v] (or 2/3) toggles the main pane to the 3-D VIEW: a
+   CAD-style isometric projection of the PHYSICAL chassis - every
+   component box extruded with the ASCII charset ( _ | \\ staircases at 45
+   degrees on screen), top faces colour-filled by the block-averaged local
+   air speed through the CFD colormap (blue = starved -> red = full flow),
+   the fan wall as the gold plane and PSU fans as gold rear-face markers.
+   The final 3-D chassis view is printed after the run and included in the
+   text report alongside the top-down slice.
    100+ column terminal recommended; Ctrl+C stops the dashboard (worker too).
 
  IT TELEMETRY & REPORTING (post-processing; config-driven)
@@ -185,6 +199,7 @@ import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections import deque
@@ -277,17 +292,22 @@ COL_FILL   = (105, 105, 112)
 COL_FANLN  = (255, 214, 10)
 COL_LABEL  = "bold bright_white"
 
-# 24-bit CFD "velocity heatmap" gradient (banner + 3-D pressure wireframe)
+# 24-bit CFD "velocity heatmap" gradient (banner + 3-D chassis view)
 CFD_CMAP_STOPS = ((0.00, (30, 62, 255)),      # blue
                   (0.25, (0, 199, 230)),      # cyan
                   (0.50, (57, 214, 92)),      # green
                   (0.75, (240, 211, 56)),     # yellow
                   (1.00, (235, 58, 42)))      # red
 
-# --- 3-D isometric wireframe --------------------------------------------------
-ISO_NX     = 10      # surface nodes across the chassis width
-ISO_NZ_MAX = 34      # surface nodes along the length (width-limited below)
-ISO_HMAX   = 7       # rows of surface relief for the pressure range
+# --- 3-D isometric chassis view -----------------------------------------------
+# Oblique/isometric affine projection of the PHYSICAL component boxes (CAD
+# style): chassis length z runs along the columns, width x recedes at 45
+# degrees on screen (+2 cols +1 row per step - character cells are ~2:1, so
+# slope 1/2 LOOKS like 45), height y is vertical. Height rows are clamped so
+# a 6U router cannot stretch the grid apart (ISO_HGT_*).
+ISO_HGT_MIN = 3      # min rows of extruded chassis height
+ISO_HGT_MAX = 7      # max rows of extruded chassis height (clamp)
+ISO_HGT_PER_M = 26   # rows per metre of chassis height before the clamp
 
 SYS_BAR_W  = 12      # CPU/RAM meter width in the SYSTEM widget
 
@@ -348,6 +368,19 @@ DEFAULT_CONFIG = {
             "total_dimm_slots": 24,
             "populated_pcie_slots": 2, "pcie_zone_z": [0.55, 0.65],
             "heat_load": 350.0, "baseline_zeta": 25.0,
+            # rear PSU bank: dense high-impedance porous blocks (each PSU is
+            # a packed brick the air must be pulled through by its own 40 mm
+            # fan - modeled as impedance; the PSU fan is drawn, not solved)
+            "custom_zones": [
+                {"name": "psu_1", "label": "PSU 1", "type": "porous",
+                 "box": [0.005, 0.006, 0.652, 0.085, 0.074, 0.696],
+                 "zeta": 200.0, "permeability": 1e-7,
+                 "fan_rpm": 15000, "fan_size_mm": 40},
+                {"name": "psu_2", "label": "PSU 2", "type": "porous",
+                 "box": [0.345, 0.006, 0.652, 0.425, 0.074, 0.696],
+                 "zeta": 200.0, "permeability": 1e-7,
+                 "fan_rpm": 15000, "fan_size_mm": 40},
+            ],
             "mesh_settings": {"coarse": {"element_size_mm": 15.0},
                               "medium": {"element_size_mm": 8.0},
                               "fine": {"element_size_mm": 4.0},
@@ -374,6 +407,16 @@ DEFAULT_CONFIG = {
             "total_dimm_slots": 24,
             "populated_pcie_slots": 2, "pcie_zone_z": [0.55, 0.65],
             "heat_load": 300.0, "baseline_zeta": 25.0,
+            "custom_zones": [
+                {"name": "psu_1", "label": "PSU 1", "type": "porous",
+                 "box": [0.005, 0.004, 0.655, 0.080, 0.039, 0.729],
+                 "zeta": 200.0, "permeability": 1e-7,
+                 "fan_rpm": 15000, "fan_size_mm": 40},
+                {"name": "psu_2", "label": "PSU 2", "type": "porous",
+                 "box": [0.354, 0.004, 0.655, 0.429, 0.039, 0.729],
+                 "zeta": 200.0, "permeability": 1e-7,
+                 "fan_rpm": 15000, "fan_size_mm": 40},
+            ],
             "mesh_settings": {"coarse": {"element_size_mm": 15.0},
                               "medium": {"element_size_mm": 8.0},
                               "fine": {"element_size_mm": 4.0},
@@ -400,6 +443,16 @@ DEFAULT_CONFIG = {
             "total_dimm_slots": 24,
             "populated_pcie_slots": 3, "pcie_zone_z": [0.55, 0.66],
             "heat_load": 400.0, "baseline_zeta": 25.0,
+            "custom_zones": [
+                {"name": "psu_1", "label": "PSU 1", "type": "porous",
+                 "box": [0.005, 0.006, 0.665, 0.080, 0.081, 0.710],
+                 "zeta": 200.0, "permeability": 1e-7,
+                 "fan_rpm": 15000, "fan_size_mm": 40},
+                {"name": "psu_2", "label": "PSU 2", "type": "porous",
+                 "box": [0.354, 0.006, 0.665, 0.429, 0.081, 0.710],
+                 "zeta": 200.0, "permeability": 1e-7,
+                 "fan_rpm": 15000, "fan_size_mm": 40},
+            ],
             "mesh_settings": {"coarse": {"element_size_mm": 15.0},
                               "medium": {"element_size_mm": 8.0},
                               "fine": {"element_size_mm": 4.0},
@@ -426,6 +479,16 @@ DEFAULT_CONFIG = {
             "total_dimm_slots": 24,
             "populated_pcie_slots": 2, "pcie_zone_z": [0.52, 0.62],
             "heat_load": 290.0, "baseline_zeta": 25.0,
+            "custom_zones": [
+                {"name": "psu_1", "label": "PSU 1", "type": "porous",
+                 "box": [0.005, 0.004, 0.628, 0.080, 0.039, 0.695],
+                 "zeta": 200.0, "permeability": 1e-7,
+                 "fan_rpm": 15000, "fan_size_mm": 40},
+                {"name": "psu_2", "label": "PSU 2", "type": "porous",
+                 "box": [0.354, 0.004, 0.628, 0.429, 0.039, 0.695],
+                 "zeta": 200.0, "permeability": 1e-7,
+                 "fan_rpm": 15000, "fan_size_mm": 40},
+            ],
             "mesh_settings": {"coarse": {"element_size_mm": 15.0},
                               "medium": {"element_size_mm": 8.0},
                               "fine": {"element_size_mm": 4.0},
@@ -452,6 +515,16 @@ DEFAULT_CONFIG = {
             "total_dimm_slots": 24,
             "populated_pcie_slots": 4, "pcie_zone_z": [0.54, 0.66],
             "heat_load": 380.0, "baseline_zeta": 25.0,
+            "custom_zones": [
+                {"name": "psu_1", "label": "PSU 1", "type": "porous",
+                 "box": [0.005, 0.006, 0.665, 0.080, 0.081, 0.706],
+                 "zeta": 200.0, "permeability": 1e-7,
+                 "fan_rpm": 15000, "fan_size_mm": 40},
+                {"name": "psu_2", "label": "PSU 2", "type": "porous",
+                 "box": [0.354, 0.006, 0.665, 0.429, 0.081, 0.706],
+                 "zeta": 200.0, "permeability": 1e-7,
+                 "fan_rpm": 15000, "fan_size_mm": 40},
+            ],
             "mesh_settings": {"coarse": {"element_size_mm": 15.0},
                               "medium": {"element_size_mm": 8.0},
                               "fine": {"element_size_mm": 4.0},
@@ -494,7 +567,8 @@ DEFAULT_CONFIG = {
                  "box": [0.344, 0.006, 0.56, 0.424, 0.037, 0.83],
                  "zeta": 170.0, "permeability": 1.5e-7, "telemetry": "gpu"},
                 {"name": "psu_bank", "label": "PSU 1+1", "type": "solid",
-                 "box": [0.182, 0.006, 0.60, 0.252, 0.037, 0.876]},
+                 "box": [0.182, 0.006, 0.60, 0.252, 0.037, 0.876],
+                 "fan_rpm": 15000, "fan_size_mm": 40},
             ],
             "mesh_settings": {"coarse": {"element_size_mm": 15.0},
                               "medium": {"element_size_mm": 9.0},
@@ -529,9 +603,11 @@ DEFAULT_CONFIG = {
                  "zeta": 55.0, "permeability": 5e-7,
                  "telemetry": "optics"},
                 {"name": "psu_1", "label": "PSU 1", "type": "solid",
-                 "box": [0.006, 0.004, 0.365, 0.081, 0.0405, 0.400]},
+                 "box": [0.006, 0.004, 0.365, 0.081, 0.0405, 0.400],
+                 "fan_rpm": 15000, "fan_size_mm": 40},
                 {"name": "psu_2", "label": "PSU 2", "type": "solid",
-                 "box": [0.358, 0.004, 0.365, 0.433, 0.0405, 0.400]},
+                 "box": [0.358, 0.004, 0.365, 0.433, 0.0405, 0.400],
+                 "fan_rpm": 15000, "fan_size_mm": 40},
             ],
             "mesh_settings": {"coarse": {"element_size_mm": 10.0},
                               "medium": {"element_size_mm": 6.0},
@@ -566,9 +642,11 @@ DEFAULT_CONFIG = {
                  "zeta": 55.0, "permeability": 5e-7,
                  "telemetry": "optics"},
                 {"name": "psu_1", "label": "PSU 1", "type": "solid",
-                 "box": [0.005, 0.004, 0.59, 0.080, 0.039, 0.675]},
+                 "box": [0.005, 0.004, 0.59, 0.080, 0.039, 0.675],
+                 "fan_rpm": 15000, "fan_size_mm": 40},
                 {"name": "psu_2", "label": "PSU 2", "type": "solid",
-                 "box": [0.347, 0.004, 0.59, 0.422, 0.039, 0.675]},
+                 "box": [0.347, 0.004, 0.59, 0.422, 0.039, 0.675],
+                 "fan_rpm": 15000, "fan_size_mm": 40},
             ],
             "mesh_settings": {"coarse": {"element_size_mm": 12.0},
                               "medium": {"element_size_mm": 7.0},
@@ -601,7 +679,8 @@ DEFAULT_CONFIG = {
                  "zeta": 20.0, "permeability": 8e-7},
                 {"name": "psu_bank", "label": "PSU BANK (6x)",
                  "type": "solid",
-                 "box": [0.02, 0.005, 0.050, 0.417, 0.070, 0.095]},
+                 "box": [0.02, 0.005, 0.050, 0.417, 0.070, 0.095],
+                 "fan_rpm": 15000, "fan_size_mm": 40},
                 {"name": "linecard_bay", "label": "LINE CARDS",
                  "type": "porous",
                  "box": [0.02, 0.090, 0.13, 0.4174, 0.170, 0.40],
@@ -652,7 +731,8 @@ DEFAULT_CONFIG = {
                  "box": [0.262, 0.08, 0.18, 0.300, 0.196, 0.41],
                  "zeta": 55.0, "permeability": 5e-7, "telemetry": "gpu"},
                 {"name": "psu_shroud", "label": "PSU", "type": "solid",
-                 "box": [0.375, 0.005, 0.28, 0.435, 0.195, 0.455]},
+                 "box": [0.375, 0.005, 0.28, 0.435, 0.195, 0.455],
+                 "fan_rpm": 2000, "fan_size_mm": 120},
             ],
             "mesh_settings": {"coarse": {"element_size_mm": 20.0},
                               "medium": {"element_size_mm": 12.0},
@@ -702,6 +782,109 @@ def resolve_fan(cfg, args):
     return cfg["fans"][args["fan"]]
 
 
+# Blank template appended to server_configs.json by the wizard's "Custom
+# Server Configuration" menu entry: a plain generic 2U the user then shapes
+# by editing the JSON (and through the hardware prompts at run time).
+CUSTOM_SERVER_TEMPLATE = {
+    "display_name": "Custom Server",
+    "form_factor": "2U",
+    "chassis_width": 0.430, "chassis_height": 0.080,
+    "chassis_length": 0.700,
+    "fan_wall_z": 0.25, "fan_count": 4,
+    "drive_bay_count": 8, "drive_bay_type": "3.5in HDD",
+    "drive_bays_front": 8, "drive_bays_rear": 0,
+    "drive_zone_z": [0.05, 0.20], "drive_zeta": 95.0,
+    "drive_permeability": 5e-7,
+    "cpu_sockets": 2, "cpu_zone_z": [0.35, 0.45],
+    "cpu_zeta": 55.0, "cpu_permeability": 2e-7,
+    "total_dimm_slots": 16,
+    "populated_pcie_slots": 2, "pcie_zone_z": [0.55, 0.65],
+    "heat_load": 300.0, "baseline_zeta": 25.0,
+    "mesh_settings": {"coarse": {"element_size_mm": 15.0},
+                      "medium": {"element_size_mm": 8.0},
+                      "fine": {"element_size_mm": 4.0},
+                      "ultra": {"element_size_mm": 2.5}},
+    "requirements": {"inlet_temp_c": 22.0, "outlet_temp_max_c": 35.0,
+                     "pressure_min_pa": -250.0,
+                     "deadzone_speed_min_ms": 0.15,
+                     "cpu_min_airflow_ms": 0.5,
+                     "gpu_min_airflow_ms": 0.3,
+                     "optics_min_airflow_ms": 0.2},
+}
+
+
+def ensure_custom_server(cfg, name, config_path):
+    """Wizard 'Custom Server Configuration': look the typed name up in the
+    config; when absent, append the blank template under that name and
+    PERSIST it to server_configs.json. Returns True when a new profile was
+    written, False when the name already existed (it is then just used)."""
+    if name in cfg["servers"]:
+        return False
+    tpl = json.loads(json.dumps(CUSTOM_SERVER_TEMPLATE))   # deep copy
+    tpl["display_name"] = name
+    cfg["servers"][name] = tpl
+    with open(config_path, "w") as f:
+        json.dump(cfg, f, indent=2)
+    return True
+
+
+# Documented engineering estimates for the drive-type prompt: 2.5" bays
+# leave more open backplane area than a dense 3.5" HDD wall.
+DRIVE_TYPE_ZETA = {"2.5in NVMe/SAS": 0.75, "3.5in HDD": 1.15}
+
+
+def apply_hw_overrides(s, hw):
+    """Fold the wizard's hardware prompts into a RUNTIME copy of the profile
+    (never persisted - the temp overlay config carries it to the workers).
+
+    hw keys (all optional): drive_type ('2.5in NVMe/SAS' | '3.5in HDD'),
+    heat_load_w, inlet_temp_c, exhaust_temp_c, gpu_count + gpu_watts,
+    nic (bool). GPU/NIC need the profile's pcie_zone_z to mesh cards."""
+    dt = hw.get("drive_type")
+    if dt and s.get("drive_zone_z") and int(s.get("drive_bay_count", 0)) > 0:
+        s["drive_zeta"] = float(s["drive_zeta"]) * DRIVE_TYPE_ZETA[dt]
+        s["drive_bay_type"] = dt
+    if hw.get("heat_load_w") is not None:
+        s["heat_load"] = float(hw["heat_load_w"])
+    reqs = s.setdefault("requirements", {})
+    if hw.get("inlet_temp_c") is not None:
+        reqs["inlet_temp_c"] = float(hw["inlet_temp_c"])
+    if hw.get("exhaust_temp_c") is not None:
+        reqs["outlet_temp_max_c"] = float(hw["exhaust_temp_c"])
+    if s.get("pcie_zone_z"):
+        n_gpu = int(hw.get("gpu_count") or 0)
+        if n_gpu > 0:
+            s["populated_pcie_slots"] = min(n_gpu, 8)
+            s["heat_load"] = (float(s["heat_load"])
+                              + n_gpu * float(hw.get("gpu_watts") or 0.0))
+        if hw.get("nic"):
+            s["populated_pcie_slots"] = min(
+                int(s.get("populated_pcie_slots", 0)) + 1, 8)
+            s["nic_slot"] = True
+    return s
+
+
+def enforce_ultra_ram(mesh_level):
+    """Stage 3 strict gate: 'ultra' stays selectable for everyone, but on a
+    machine with less than 32 GB of physical RAM the selection must crash
+    hard - a deliberate, unhandled MemoryError (spec: no greying out, no
+    graceful fallback). Threshold is 30 GiB because the kernel reserves
+    memory: a real 32 GB box reports ~31.3 GiB total, and it must PASS."""
+    if mesh_level != "ultra":
+        return
+    total = None
+    if HAVE_PSUTIL:
+        total = psutil.virtual_memory().total
+    else:
+        try:                          # psutil failed to install: same gate
+            with open("/proc/meminfo") as f:
+                total = int(f.readline().split()[1]) * 1024
+        except (OSError, ValueError, IndexError):
+            return                    # RAM unknowable: cannot enforce
+    if total < 30 * 2**30:
+        raise MemoryError("Insufficient RAM for Ultra mesh. System halting.")
+
+
 # ==============================================================================
 #  PARAMETRIC GEOMETRY ENGINE (pure numpy/python - no gmsh imports here)
 # ==============================================================================
@@ -737,7 +920,10 @@ def build_geometry(server_cfg):
         "porous" is an impedance zone (zeta over the zone's z-length +
         permeability - GPU heatsinks, optics cages, filters, card bays).
         Optional "label" (canvas text) and "telemetry" ("cpu"/"gpu"/
-        "optics") hook a zone into the thermal threshold checks.
+        "optics") hook a zone into the thermal threshold checks; optional
+        "fan_rpm" + "fan_size_mm" mark the zone as carrying its own fan
+        (PSUs) - drawn as the gold fan marker, not solved as a momentum
+        source.
       - optics_zone_z [z0,z1]: moves the optics telemetry slab from the
         default rear-I/O position (switches: the front cage).
     """
@@ -804,9 +990,12 @@ def build_geometry(server_cfg):
             solids.append((f"pcie_card_{i+1}",
                            (x0, 0.12 * H, float(pz0),
                             x0 + card_w, 0.82 * H, float(pz1))))
+        if server_cfg.get("nic_slot"):     # wizard: last populated slot is
+            labels[f"pcie_card_{n_pcie}"] = "NIC"    # the networking card
 
     solid_telem = {}
     extra_porous = []
+    fan_marks = []          # zones carrying their own fan (PSUs): rendered
     for k, zone in enumerate(server_cfg.get("custom_zones", [])):
         name = zone.get("name") or f"zone_{k}"
         b = tuple(float(v) for v in zone["box"])
@@ -816,6 +1005,10 @@ def build_geometry(server_cfg):
         kind = zone.get("type", "solid")
         labels[name] = zone.get("label", _block_label(name))
         telem = zone.get("telemetry")
+        if zone.get("fan_rpm"):
+            fan_marks.append({"name": name, "box": b,
+                              "rpm": int(zone["fan_rpm"]),
+                              "size_mm": int(zone.get("fan_size_mm", 40))})
         if kind == "porous":
             if "zeta" not in zone or "permeability" not in zone:
                 raise ValueError(f"porous zone '{name}' needs zeta and "
@@ -844,7 +1037,7 @@ def build_geometry(server_cfg):
         "dims": (W, H, L), "fan_z": fz,
         "drives": drives, "cpus": cpus, "solids": solids,
         "extra_porous": extra_porous, "labels": labels,
-        "solid_telem": solid_telem,
+        "solid_telem": solid_telem, "fan_marks": fan_marks,
         "optics_box": optics_box, "optics_custom": bool(oz),
         "n_bays": int(server_cfg.get("drive_bay_count", 0)),
     }
@@ -1775,104 +1968,196 @@ def build_mini_panel(speed_xy, vref, title, n_bays=None):
                  box=box.SQUARE, padding=(0, 1))
 
 
-def build_iso_panel(press, geo, max_cols,
-                    title="3D PRESSURE TOPOLOGY (isometric)"):
-    """Isometric ASCII/Unicode wireframe of the mid-height pressure surface.
+def build_chassis_iso_panel(speed, geo, vref, max_cols, max_rows,
+                            title="3D CHASSIS VIEW (isometric)"):
+    """CAD-style isometric projection of the PHYSICAL server chassis.
 
-    The streamed P(x,z) slice is block-averaged onto an ISO_NX x nz node
-    grid, normalised (2nd..98th percentile) to ISO_HMAX rows of relief and
-    drawn as a wireframe sheet inside the chassis footprint box: length z
-    runs right (+2 cols/node), width x runs lower-right (+1 col +1 row/node,
-    the depth axis), pressure lifts nodes up. Segments take the CFD colormap
-    (blue = low P -> red = high P); solid components (NaN in the slice)
-    leave holes in the sheet; the fan wall is the yellow line/tick.
+    Every component box (drive cage, CPU heatsinks, RAM banks, PCIe cards,
+    PSUs and the other custom zones) is drawn as an extruded 3-D block with
+    the classic ASCII charset ( _  |  \\ staircases), placed by the 2-D
+    affine isometric map
+
+        [col]   [2s   0  2s] [x]      z (length) runs along the columns,
+        [row] = [ s -hy   0] [y]      x (width) recedes at 45 deg on screen
+                             [z]      (+2 cols +1 row - cells are ~2:1 tall,
+                                      so slope 1/2 LOOKS like 45 degrees),
+                                      y (height) extrudes upward.
+
+    Colour overlays the computed flow: the streamed mid-height |u| field is
+    averaged over each block's x-z footprint, normalised by the fan-plane
+    velocity and mapped through the CFD colormap (blue = starved -> red =
+    full flow); the block's top face is filled with that colour. Solid
+    blocks (no interior flow - their footprint samples NaN) use a one-cell
+    washing shell instead, matching the telemetry proxy. The fan wall is
+    the gold plane; blocks with a config fan_rpm (PSUs) get the gold fan
+    marker on their rear face. Painter's algorithm far-x -> near-x, then
+    stack bottom -> top, so near/tall blocks overdraw. The height scale is
+    clamped to ISO_HGT_MIN..MAX rows so a 6U chassis cannot stretch the
+    character grid apart.
     """
-    nx = ISO_NX
-    _W, _H, L = geo["dims"]
-    nz = int(np.clip((max_cols - nx - 2) // 2 + 1, 8, ISO_NZ_MAX))
-    pr, pc = press.shape
-
-    # nan-safe block average of the slice onto the node grid
-    xi = np.linspace(0, pr, nx + 1).astype(int)
-    zi = np.linspace(0, pc, nz + 1).astype(int)
-    grid = np.full((nx, nz), np.nan)
-    for i in range(nx):
-        for j in range(nz):
-            blk = press[xi[i]:max(xi[i + 1], xi[i] + 1),
-                        zi[j]:max(zi[j + 1], zi[j] + 1)]
-            if np.isfinite(blk).any():
-                grid[i, j] = np.nanmean(blk)
-    finite = np.isfinite(grid)
-    if finite.sum() < 4:
-        return Panel(Text("pressure field warming up...", style="dim"),
-                     title=title, border_style="cyan", box=box.SQUARE,
-                     padding=(0, 1))
-
-    p_lo = float(np.nanpercentile(grid, 2))
-    p_hi = float(np.nanpercentile(grid, 98))
-    span = max(p_hi - p_lo, 1e-12)
-    tval = np.clip((grid - p_lo) / span, 0.0, 1.0)
-
-    nrows_cv = ISO_HMAX + nx + 2
-    ncols_cv = 2 * nz + nx
+    W, H, L = geo["dims"]
+    hgt_rows = int(np.clip(round(ISO_HGT_PER_M * H), ISO_HGT_MIN,
+                           ISO_HGT_MAX))
+    # scale [cells/m] from BOTH budgets: cols span 2s(L+W), rows span
+    # hgt_rows + s*W (+ margins); the live pane passes MAIN_ROWS, the
+    # post-run/report render can afford more
+    s = min((max_cols - 6) / (2.0 * (L + W)),
+            (max_rows - hgt_rows - 4) / max(W, 1e-6))
+    if s <= 3:
+        return Panel(Text("terminal too small for the 3-D chassis view",
+                          style="dim"), title=title, border_style="cyan",
+                     box=box.SQUARE, padding=(0, 1))
+    hy = hgt_rows / max(H, 1e-6)
+    r_base = 1 + hgt_rows
+    nrows_cv = int(round(r_base + s * W)) + 2
+    ncols_cv = int(round(2 * s * (L + W))) + 4
     cv = CharCanvas(nrows_cv, ncols_cv)
-
-    def proj(i, j, h):
-        return 1 + ISO_HMAX + i - int(round(float(h))), 1 + 2 * j + i
-
-    def seg(a, b, style, ch=None):
-        (r0, c0), (r1, c1) = a, b
-        dr, dc = r1 - r0, c1 - c0
-        n = max(abs(dr), abs(dc))
-        if n == 0:
-            cv.put(r0, c0, ch or "·", style)
-            return
-        if ch is None:
-            ch = ("─" if dr == 0 else "│" if dc == 0
-                  else "╲" if (dr > 0) == (dc > 0) else "╱")
-        for k in range(n + 1):
-            cv.put(int(round(r0 + dr * k / n)),
-                   int(round(c0 + dc * k / n)), ch, style)
-
-    # chassis footprint at zero relief, then the fan wall across it
     dim = "dim " + _hex(COL_BORDER)
-    corners = [proj(0, 0, 0), proj(0, nz - 1, 0),
-               proj(nx - 1, nz - 1, 0), proj(nx - 1, 0, 0)]
-    for a, b in ((0, 1), (1, 2), (2, 3), (3, 0)):
-        seg(corners[a], corners[b], dim)
-    jf = int(round(geo["fan_z"] / L * (nz - 1)))
-    fan_style = "bold " + _hex(COL_FANLN)
-    seg(proj(0, jf, 0), proj(nx - 1, jf, 0), _hex(COL_FANLN))
+    gold = "bold " + _hex(COL_FANLN)
 
-    # pressure sheet, far row first so nearer rows overdraw (painter's algo).
-    # Full grid connectivity (gnuplot-style): every finite node links to BOTH
-    # its +z neighbour (i, j+1) and its +x neighbour (i+1, j).
-    hgt = np.where(finite, np.round(tval * ISO_HMAX), 0.0)
-    for i in range(nx):
-        for j in range(nz - 1):
-            if finite[i, j] and finite[i, j + 1]:
-                seg(proj(i, j, hgt[i, j]), proj(i, j + 1, hgt[i, j + 1]),
-                    _hex(cfd_colormap(0.5 * (tval[i, j] + tval[i, j + 1]))))
-        if i < nx - 1:
-            for j in range(nz):
-                if finite[i, j] and finite[i + 1, j]:
-                    seg(proj(i, j, hgt[i, j]), proj(i + 1, j, hgt[i + 1, j]),
-                        _hex(cfd_colormap(
-                            0.5 * (tval[i, j] + tval[i + 1, j]))))
+    def proj(x, y, z):
+        """the affine isometric map above (metres -> character cell)"""
+        return (int(round(r_base + s * x - hy * y)),
+                int(round(1 + 2 * s * z + 2 * s * x)))
 
-    # bottom-row labels: orientation + fan tick
-    _rf, cf = proj(nx - 1, jf, 0)
-    cv.put(nrows_cv - 1, cf, "┃", fan_style)
-    if cf + 4 <= ncols_cv - 6:
-        cv.stamp_text(nrows_cv - 1, cf + 1, "FAN", fan_style)
-    cv.stamp_text(nrows_cv - 1, max(0, nx - 5), "FRONT", dim)
-    cv.stamp_text(nrows_cv - 1, ncols_cv - 5, "REAR", dim)
+    def edge(a, b, style, protect=False):
+        """One axis-aligned box edge, rasterized per direction: '_' along
+        z, '|' along y, and a doubled '\\' staircase (2 cols per row) for
+        the 45-degree x axis - a Bresenham-family stepper specialised to
+        the three slopes this projection can produce."""
+        (r0, c0), (r1, c1) = a, b
+        if r0 == r1:
+            for c in range(min(c0, c1), max(c0, c1) + 1):
+                cv.put(r0, c, "_", style, protect)
+        elif c0 == c1:
+            for r in range(min(r0, r1), max(r0, r1) + 1):
+                cv.put(r, c0, "|", style, protect)
+        else:
+            if r1 < r0:
+                (r0, c0), (r1, c1) = (r1, c1), (r0, c0)
+            ch = "\\" if c1 > c0 else "/"
+            stp = 1 if c1 > c0 else -1
+            for k in range(r1 - r0 + 1):
+                cv.put(r0 + k, c0 + stp * 2 * k, ch, style, protect)
+                if k < r1 - r0:
+                    cv.put(r0 + k, c0 + stp * (2 * k + 1), ch, style,
+                           protect)
 
-    bar = Text("  P  ", style="bold")
+    def box_edges(b, style, gold_rear=False):
+        """The 9 visible edges of an extruded block for this projection
+        (visible faces: top y1, front x1, rear-end z1)."""
+        x0, y0, z0, x1, y1, z1 = b
+        tA, tB = proj(x0, y1, z0), proj(x0, y1, z1)
+        tC, tD = proj(x1, y1, z1), proj(x1, y1, z0)
+        bD, bC = proj(x1, y0, z0), proj(x1, y0, z1)
+        eB = proj(x0, y0, z1)
+        edge(tA, tB, style)                    # top face
+        edge(tD, tC, style)
+        edge(tA, tD, style)
+        rear = gold if gold_rear else style
+        edge(tB, tC, rear)
+        edge(bD, bC, style)                    # front face (x = x1)
+        edge(tD, bD, style)
+        edge(tC, bC, rear)
+        edge(eB, bC, rear)                     # rear end face (z = z1)
+        edge(tB, eB, rear)
+
+    def fill_top(b, colhex):
+        """Colour the top-face parallelogram (background paint - the text
+        report strips styles and keeps the wireframe)."""
+        x0, _y0, z0, x1, y1, z1 = b
+        (ra, _ca) = proj(x0, y1, 0)
+        (rd, _cd) = proj(x1, y1, 0)
+        for r in range(ra + 1, rd):
+            f = (r - ra) / max(rd - ra, 1)
+            x = x0 + f * (x1 - x0)
+            _r0, cl = proj(x, y1, z0)
+            _r1, cr = proj(x, y1, z1)
+            for c in range(cl + 1, cr):
+                cv.put(r, c, " ", "on " + colhex)
+
+    def stamp_label(b, colhex, label):
+        """Component name on the top face, AFTER the edges so the strokes
+        never mangle it; shrinking fallbacks down to initials+digits (a
+        cramped live pane shows 'C1', the wide report render 'CPU 1')."""
+        x0, _y0, z0, x1, y1, z1 = b
+        (ra, _ca) = proj(x0, y1, 0)
+        (rd, _cd) = proj(x1, y1, 0)
+        if rd - ra < 2:
+            return
+        rmid = (ra + rd) // 2
+        xm = x0 + (rmid - ra) / (rd - ra) * (x1 - x0)
+        _rm, cl = proj(xm, y1, z0)
+        _rm2, cr = proj(xm, y1, z1)
+        span = cr - cl - 1
+        initials = "".join(w[0] for w in label.split() if w)
+        for txt in (f" {label} ", label, label.replace(" ", ""), initials):
+            if txt and len(txt) <= span:
+                cv.stamp_text(rmid, cl + 1 + (span - len(txt)) // 2,
+                              txt, "bold bright_white on " + colhex)
+                return
+
+    # ---- chassis shell: dim wireframe box (drawn first, blocks overdraw)
+    box_edges((0.0, 0.0, 0.0, W, H, L), dim)
+    edge(proj(0.0, 0.0, 0.0), proj(0.0, 0.0, L), dim)   # far floor edge
+    edge(proj(0.0, H, 0.0), proj(0.0, 0.0, 0.0), dim)   # far-left vertical
+
+    # ---- fan wall: gold plane at z = fan_z
+    fz = geo["fan_z"]
+    edge(proj(0.0, H, fz), proj(W, H, fz), gold)
+    edge(proj(0.0, 0.0, fz), proj(W, 0.0, fz), "dim " + _hex(COL_FANLN))
+    edge(proj(0.0, H, fz), proj(0.0, 0.0, fz), gold)
+    edge(proj(W, H, fz), proj(W, 0.0, fz), gold)
+    fr, fc = proj(0.0, H, fz)
+    cv.stamp_text(max(0, fr - 1), max(0, fc - 4), "FAN WALL", gold)
+
+    # ---- component blocks, coloured by the local sampled air speed -------
+    n_rf, n_cf = speed.shape
+
+    def block_color(b, solid):
+        x0, _y0, z0, x1, _y1, z1 = b
+        pad = 1 if solid else 0     # solids sample the washing shell
+        r0f = max(0, int(np.floor(x0 / W * n_rf)) - pad)
+        r1f = min(n_rf, int(np.ceil(x1 / W * n_rf)) + pad)
+        c0f = max(0, int(np.floor(z0 / L * n_cf)) - pad)
+        c1f = min(n_cf, int(np.ceil(z1 / L * n_cf)) + pad)
+        blk = speed[r0f:max(r1f, r0f + 1), c0f:max(c1f, c0f + 1)]
+        if blk.size and np.isfinite(blk).any():
+            t = float(np.nanmean(blk)) / max(vref, 1e-9)
+            return _hex(cfd_colormap(min(max(t, 0.0), 1.0)))
+        return _hex(COL_FILL)
+
+    blocks = []
+    if geo["drives"]:
+        blocks.append((geo["drives"][1], "drive_array", False))
+    for name, b, _k, _c in geo["cpus"]:
+        blocks.append((b, name, False))
+    for z in geo["extra_porous"]:
+        blocks.append((z["box"], z["name"], False))
+    for name, b in geo["solids"]:
+        blocks.append((b, name, True))
+    fan_named = {m["name"] for m in geo["fan_marks"]}
+    # painter's order: far x first, then bottom of a y-stack first (note:
+    # y-stacked zones share the mid-height footprint, so they share colour)
+    blocks.sort(key=lambda t: (t[0][0] + t[0][3], t[0][1]))
+    for b, name, solid in blocks:
+        colhex = block_color(b, solid)
+        fill_top(b, colhex)
+        box_edges(b, colhex, gold_rear=(name in fan_named))
+        stamp_label(b, colhex, geo["labels"].get(name) or _block_label(name))
+
+    cv.stamp_text(nrows_cv - 1, 1, "FRONT", dim)
+    cv.stamp_text(nrows_cv - 1, max(0, ncols_cv - 6), "REAR", dim)
+
+    bar = Text("  |u|  ", style="bold")
     for k in range(24):
         bar.append("█", style=_hex(cfd_colormap(k / 23)))
-    bar.append(f"  {p_lo:+.0f} Pa .. {p_hi:+.0f} Pa (mid-height slice)",
-               style="dim")
+    bar.append(f"  0 .. {vref:.1f} m/s (block mean)", style="dim")
+    if geo["fan_marks"]:
+        m = geo["fan_marks"][0]
+        bar.append("   gold", style=gold)
+        bar.append(f" = fan wall + PSU fan ({m['size_mm']}mm/"
+                   f"{m['rpm'] // 1000}k rpm)", style="dim")
     return Panel(Group(*cv.render_lines(), bar), title=title,
                  border_style="cyan", box=box.SQUARE, padding=(0, 1))
 
@@ -1922,7 +2207,7 @@ def build_legend():
     t.append("| 2-D mid-plane streaklines | live transient field | ",
              style="dim")
     t.append("[v]", style="bold")
-    t.append(" 3-D pressure view | Ctrl+C stops", style="dim")
+    t.append(" 3-D chassis view | Ctrl+C stops", style="dim")
     return t
 
 
@@ -2050,6 +2335,17 @@ def write_report(server_cfg, params, fan_cfg, summary, comp_rows, fails,
     rc.print(f"simulated: {summary['sim_time']:.1f} s @ "
              f"dt={summary.get('dt', SIM_DT):g} s "
              f"(wall {summary['wall_time']:.0f} s)")
+    hw = params.get("hw") or {}
+    bits = []
+    if hw.get("drive_type"):
+        bits.append(f"drives {hw['drive_type']}")
+    if hw.get("gpu_count"):
+        bits.append(f"{hw['gpu_count']}x GPU @ "
+                    f"{hw.get('gpu_watts', 0.0):.0f} W")
+    if hw.get("nic"):
+        bits.append("NIC populated")
+    if bits:
+        rc.print(f"hardware : {', '.join(bits)}")
     rc.print()
     rc.print(requirements_table(server_cfg["requirements"], summary,
                                 server_cfg["heat_load"]))
@@ -2115,7 +2411,7 @@ def reader_thread(conn, state):
         state["done"].set()
 
 
-def launcher_wizard(console, cfg):
+def launcher_wizard(console, cfg, config_path):
     console.clear()
     render_banner(console)
     console.print(Panel.fit(
@@ -2124,7 +2420,7 @@ def launcher_wizard(console, cfg):
         "[white]Transient Navier-Stokes (incremental pressure-correction) on "
         "MPI workers[/]\n"
         "[dim]parametric gmsh meshing from server_configs.json | live ASCII "
-        "flow dashboard | isometric 3-D pressure view[/]",
+        "flow dashboard | isometric 3-D chassis view[/]",
         border_style="cyan", box=box.DOUBLE))
 
     def bays_cell(s):
@@ -2147,11 +2443,75 @@ def launcher_wizard(console, cfg):
                      bays_cell(s),
                      str(s.get("populated_pcie_slots", 0)),
                      str(s.get("total_dimm_slots", 0)))
+    custom_row = len(servers) + 1
+    menu.add_row(str(custom_row), "[bold]custom[/]",
+                 "[bold]Custom Server Configuration[/] (type a name; new "
+                 "names are appended to the JSON)", "-", "-", "-", "-")
     console.print(menu)
     sel = Prompt.ask("  Select target server profile",
-                     choices=[str(i) for i in range(1, len(servers) + 1)],
+                     choices=[str(i) for i in range(1, custom_row + 1)],
                      default="1", console=console)
-    profile = servers[int(sel) - 1]
+    if int(sel) == custom_row:
+        while True:
+            name = Prompt.ask("    Custom server name",
+                              console=console).strip()
+            if name:
+                break
+            console.print("    [red]a name is required[/]")
+        if ensure_custom_server(cfg, name, config_path):
+            console.print(f"    [green]->[/] new profile '{name}' appended "
+                          f"to {config_path} (generic 2U template - edit "
+                          "the JSON to shape its geometry)")
+        else:
+            console.print(f"    [green]->[/] existing profile '{name}' "
+                          "loaded")
+        profile = name
+    else:
+        profile = servers[int(sel) - 1]
+
+    # --- hardware configuration prompts (RUNTIME overrides - the profile
+    # --- JSON stays untouched; a temp overlay config carries them to the
+    # --- workers)
+    s = json.loads(json.dumps(cfg["servers"][profile]))    # deep copy
+    reqs0 = s.get("requirements", {})
+    console.print("\n  [bold]Hardware configuration[/] [dim](Enter keeps "
+                  "the profile default)[/]")
+    hw = {}
+    if int(s.get("drive_bay_count", 0)) > 0 and s.get("drive_zone_z"):
+        dsel = Prompt.ask("  Drive type  [1] 2.5in NVMe/SAS  [2] 3.5in HDD",
+                          choices=["1", "2"],
+                          default="2" if "3.5" in str(s.get("drive_bay_type")
+                                                      or "") else "1",
+                          console=console)
+        hw["drive_type"] = ("2.5in NVMe/SAS", "3.5in HDD")[int(dsel) - 1]
+    hw["heat_load_w"] = FloatPrompt.ask(
+        "  Total system wattage [W of heat load]",
+        default=float(s["heat_load"]), console=console)
+    hw["inlet_temp_c"] = FloatPrompt.ask(
+        "  Ambient intake air temperature [degC]",
+        default=float(reqs0.get("inlet_temp_c", 22.0)), console=console)
+    hw["exhaust_temp_c"] = FloatPrompt.ask(
+        "  Desired exhaust temperature ceiling [degC]",
+        default=float(reqs0.get("outlet_temp_max_c", 35.0)), console=console)
+    if hw["exhaust_temp_c"] <= hw["inlet_temp_c"]:
+        console.print("    [yellow]note:[/] exhaust ceiling <= intake - the "
+                      "outlet temperature check can only FAIL.")
+    if s.get("pcie_zone_z"):
+        if Confirm.ask("  GPUs present?", default=False, console=console):
+            n_gpu = IntPrompt.ask("    Number of GPUs (1-8)", default=1,
+                                  console=console)
+            hw["gpu_count"] = max(1, min(int(n_gpu), 8))
+            hw["gpu_watts"] = max(0.0, FloatPrompt.ask(
+                "    Wattage per GPU [W]", default=250.0, console=console))
+            console.print(f"    [dim]{hw['gpu_count']} card(s) meshed in "
+                          "the PCIe zone; wattage joins the heat load[/]")
+        hw["nic"] = Confirm.ask("  Networking card populated "
+                                "(Mellanox/Intel class)?", default=False,
+                                console=console)
+    else:
+        console.print("    [dim]profile has no PCIe riser - GPU/NIC prompts "
+                      "skipped[/]")
+    s = apply_hw_overrides(s, hw)
 
     fans = list(cfg["fans"].keys())
     fmenu = Table(box=box.SIMPLE, title="Fans", title_style="bold")
@@ -2211,8 +2571,6 @@ def launcher_wizard(console, cfg):
         console.print(f"    [yellow]note:[/] {sim_time / dt:,.0f} steps at "
                       "this dt - expect a long solve.")
 
-    s = cfg["servers"][profile]
-
     # --- mesh resolution preset + RAM safeguard ------------------------------
     ms = s.get("mesh_settings") or DEFAULT_MESH_SETTINGS
     if "mesh_settings" not in s:
@@ -2233,22 +2591,27 @@ def launcher_wizard(console, cfg):
                       choices=[str(i) for i in range(1, len(levels) + 1)],
                       default="1", console=console)
     mesh_level = levels[int(msel) - 1]
+    # Stage 3 STRICT gate: ultra is offered to everyone, but selecting it
+    # on a machine under 32 GB raises MemoryError and the script dies with
+    # the traceback - deliberately unhandled, per spec
+    enforce_ultra_ram(mesh_level)
     mesh_mm = float(ms[mesh_level]["element_size_mm"])
     n_est = est_cells(build_geometry(s), mesh_mm / 1000.0)
-    try:                                    # container-visible MemTotal check
-        with open("/proc/meminfo") as f:
-            total_gb = int(f.readline().split()[1]) / 1024**2
-        need = MESH_RAM_HIGH_GB.get(mesh_level, 0)
-        if need > 0.8 * total_gb:
-            console.print(f"    [bold red]RAM warning:[/] this preset may "
-                          f"need ~{need} GB; this machine reports "
-                          f"{total_gb:.0f} GB total.")
-            if not Confirm.ask("    Continue anyway?", default=False,
-                               console=console):
-                console.print("  [yellow]Aborted.[/]")
-                return None
-    except (OSError, ValueError, IndexError):
-        pass                                # no /proc: skip, never block
+    if mesh_level != "ultra":               # soft confirm for the rest
+        try:                                # container-visible MemTotal check
+            with open("/proc/meminfo") as f:
+                total_gb = int(f.readline().split()[1]) / 1024**2
+            need = MESH_RAM_HIGH_GB.get(mesh_level, 0)
+            if need > 0.8 * total_gb:
+                console.print(f"    [bold red]RAM warning:[/] this preset "
+                              f"may need ~{need} GB; this machine reports "
+                              f"{total_gb:.0f} GB total.")
+                if not Confirm.ask("    Continue anyway?", default=False,
+                                   console=console):
+                    console.print("  [yellow]Aborted.[/]")
+                    return None
+        except (OSError, ValueError, IndexError):
+            pass                            # no /proc: skip, never block
 
     summary = Table(box=box.SIMPLE, show_header=False, pad_edge=False)
     summary.add_column(style="dim")
@@ -2262,13 +2625,25 @@ def launcher_wizard(console, cfg):
     summary.add_row("Mesh resolution",
                     f"{MESH_LEVEL_LABEL.get(mesh_level, mesh_level)} "
                     f"({mesh_mm:g} mm, ~{n_est:,.0f} elements est.)")
-    summary.add_row("Heat load (config)", f"{s['heat_load']:.0f} W")
+    summary.add_row("Heat load", f"{s['heat_load']:.0f} W")
+    if hw.get("drive_type"):
+        summary.add_row("Drive type", hw["drive_type"])
+    if hw.get("gpu_count"):
+        summary.add_row("GPUs", f"{hw['gpu_count']} x "
+                        f"{hw.get('gpu_watts', 0.0):.0f} W (meshed as PCIe "
+                        "cards)")
+    if hw.get("nic"):
+        summary.add_row("NIC", "1 slot (Mellanox/Intel class)")
+    summary.add_row("Intake -> exhaust ceiling",
+                    f"{s['requirements']['inlet_temp_c']:.1f} -> "
+                    f"{s['requirements']['outlet_temp_max_c']:.1f} degC")
     console.print(Panel(summary, title="Run parameters", border_style="cyan"))
     if not Confirm.ask("  Launch the MPI solver?", default=True,
                        console=console):
         console.print("  [yellow]Aborted.[/]")
         return None
-    return {"profile": profile, "fan": fan, "fan_custom": fan_custom,
+    return {"profile": profile, "profile_runtime": s, "hw": hw,
+            "fan": fan, "fan_custom": fan_custom,
             "cores": cores, "sim_time": sim_time, "dt": dt,
             "mesh": mesh_level}
 
@@ -2302,11 +2677,20 @@ def detect_mpi_flags():
 def launcher_main(config_path):
     console = Console()
     cfg = load_config(config_path)
-    params = launcher_wizard(console, cfg)
+    params = launcher_wizard(console, cfg, config_path)
     if params is None:
         return
 
-    server_cfg = cfg["servers"][params["profile"]]
+    # RUNTIME profile (config + hardware prompt overrides). The workers
+    # rebuild geometry from JSON, so the overrides ride to them in a temp
+    # overlay config - the user's server_configs.json is never touched.
+    server_cfg = params["profile_runtime"]
+    run_cfg = json.loads(json.dumps(cfg))
+    run_cfg["servers"][params["profile"]] = server_cfg
+    fd, run_cfg_path = tempfile.mkstemp(prefix="asciistream_run_",
+                                        suffix=".json")
+    with os.fdopen(fd, "w") as f:
+        json.dump(run_cfg, f)
     geo = build_geometry(server_cfg)
     ncols = int(np.clip(console.width - MINI_COLS - 12, 40, MAIN_COLS_MAX))
 
@@ -2321,7 +2705,7 @@ def launcher_main(config_path):
            "--sim-time", str(params["sim_time"]), "--dt", str(params["dt"]),
            "--mesh", params["mesh"],
            "--callback-port", str(port), "--cols", str(ncols),
-           "--config", os.path.abspath(config_path)]
+           "--config", run_cfg_path]
     if params["fan_custom"]:
         cmd += ["--fan-cfm", str(params["fan_custom"]["max_cfm"]),
                 "--fan-mmh2o", str(params["fan_custom"]["max_mmh2o"])]
@@ -2351,6 +2735,10 @@ def launcher_main(config_path):
         return
     finally:
         srv.close()
+        try:            # workers read the overlay before connecting back,
+            os.unlink(run_cfg_path)     # so it is disposable either way
+        except OSError:
+            pass
 
     state = {"lock": threading.Lock(), "frame": None, "summary": None,
              "n_frames": 0, "done": threading.Event()}
@@ -2379,8 +2767,9 @@ def launcher_main(config_path):
             arrays["front"], vref, "FRONT INLET", n_bays=geo["n_bays"])
         scene["rear_panel"] = build_mini_panel(arrays["rear"], vref,
                                                "REAR EXHAUST")
-        if "press" in arrays:
-            scene["iso_panel"] = build_iso_panel(arrays["press"], geo, ncols)
+        if "speed" in arrays:
+            scene["iso_panel"] = build_chassis_iso_panel(
+                arrays["speed"], geo, vref, ncols, MAIN_ROWS)
 
     seen = 0
 
@@ -2487,7 +2876,7 @@ def launcher_main(config_path):
         summary = state["summary"]
         fan_cfg = params["fan_custom"] or cfg["fans"][params["fan"]]
         console.print()
-        if scene["iso_panel"]:      # final pressure topology, 3-D view
+        if scene["iso_panel"]:      # final 3-D chassis view
             console.print(scene["iso_panel"])
         console.print(requirements_table(server_cfg["requirements"], summary,
                                          server_cfg["heat_load"]))

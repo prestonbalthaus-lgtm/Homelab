@@ -20,18 +20,29 @@ Docker.
   slow → `-` moderate → `*` fast, green = healthy flow, red = dead zone),
   labelled geometry (`[ CPU 1 ]`, `[ RAM ]`, `[ PCIe ]`, `[ FAN WALL ]`),
   front/rear cross-section panes and a live `psutil` CPU/RAM widget.
-- **3-D isometric view** — press `v` (or `2`/`3`) to flip the main pane to a
-  perspective wireframe of the mid-height pressure surface, coloured with the
-  CFD colormap; the final pressure topology is reprinted after the run and
-  embedded in the text report.
-- **10 hardware profiles** — rack servers, a 4×GPU node, two 32×QSFP
-  switches, a 6RU aggregation router and an ATX mid-tower, all generated
-  parametrically from `server_configs.json` (no hardcoded geometry).
+- **3-D isometric chassis view** — press `v` (or `2`/`3`) to flip the main
+  pane to a CAD-style isometric projection of the physical chassis: every
+  component box extruded in ASCII, top faces colour-filled by the local
+  block-averaged air speed (blue = starved → red = full flow), the fan wall
+  and the PSU fans picked out in gold; the final view is reprinted after
+  the run and embedded in the text report.
+- **10 hardware profiles + custom** — rack servers, a 4×GPU node, two
+  32×QSFP switches, a 6RU aggregation router and an ATX mid-tower, all
+  generated parametrically from `server_configs.json` (no hardcoded
+  geometry), the rack chassis complete with rear PSU banks carrying their
+  own 40 mm fans; *Custom Server Configuration* in the wizard appends a
+  generic-2U template under any new name for you to shape.
+- **Hardware prompts** — every run asks drive type (2.5″ NVMe/SAS vs 3.5″
+  HDD → drive-cage impedance), total system wattage, ambient intake and
+  desired exhaust temperature, GPU count + wattage (meshed as PCIe cards,
+  watts joining the heat load) and a NIC slot. All runtime overrides —
+  `server_configs.json` on disk is never edited by them.
 - **Fan library + custom fan creator** — real 80 mm server fans and generic
   40/60/120 mm classes, or enter any max-CFM / max-mmH₂O pair in the wizard.
 - **Mesh presets with RAM guidance** — coarse → ultra, per-profile element
   sizes, an estimated cell count and a MemTotal safeguard that asks before
-  letting you exceed the machine.
+  letting you exceed the machine — except `ultra`, which under 32 GB of
+  RAM deliberately halts with a `MemoryError` (see the table note).
 - **IT telemetry** — post-run airflow checks per component (CPU / GPU /
   optics) with `[THERMAL WARNING]` banners, a fan acoustics/power table, and
   an exportable plain-text run report.
@@ -67,7 +78,11 @@ Mesh presets (RAM guidance as shown in the wizard):
 \* default; each profile tunes its own sizes in `mesh_settings` (e.g. the
 6RU Cisco meshes coarse at 21 mm, the 1U Arista at 10 mm). **Coarse and
 medium are the validated presets** — fine/ultra mesh correctly but have not
-been solved end-to-end here.
+been solved end-to-end here. **`ultra` is hard-gated:** selecting it on a
+machine with less than 32 GB of physical RAM raises an unhandled
+`MemoryError` ("Insufficient RAM for Ultra mesh") — by design, no confirm
+prompt, the launcher just exits with the traceback. The other presets get
+the soft RAM warning + confirmation instead.
 
 ## Quick start
 
@@ -81,16 +96,23 @@ cd Homelab/asciistream
 pulls `docker.io/dolfinx/dolfinx:stable` on first use, mounts the project
 directory at `/work` and starts the wizard, which asks for:
 
-1. **Server profile** (table below; Supermicro 6029U is the default)
-2. **Fan model** — a library fan or *Custom fan* (enter max CFM + max mmH₂O)
-3. **MPI ranks** — up to `max(16, cpu_count)`; oversubscription supported
-4. **Simulated time span** and **time step dt** (0.001–2.0 s, default 0.1)
-5. **Mesh resolution preset** — with the RAM guidance above; if the choice
-   likely exceeds this machine's MemTotal you are asked to confirm
+1. **Server profile** (table below; Supermicro 6029U is the default) — or
+   *Custom Server Configuration*: type a name, and unknown names are
+   appended to the JSON as a generic-2U template, then modelled
+2. **Hardware configuration** — drive type (2.5″ NVMe/SAS vs 3.5″ HDD),
+   total system wattage, ambient intake / desired exhaust °C, GPUs
+   (count + watts each) and a NIC slot; Enter keeps each profile default.
+   Runtime overrides only — the JSON on disk stays untouched
+3. **Fan model** — a library fan or *Custom fan* (enter max CFM + max mmH₂O)
+4. **MPI ranks** — up to `max(16, cpu_count)`; oversubscription supported
+5. **Simulated time span** and **time step dt** (0.001–2.0 s, default 0.1)
+6. **Mesh resolution preset** — with the RAM guidance above; a MemTotal
+   check asks to confirm oversized choices, while `ultra` on a sub-32 GB
+   machine halts hard (table note above)
 
 Then the launcher spawns the MPI worker pool and the live dashboard runs
 until the simulated time is reached (`Ctrl+C` stops both). After the run:
-telemetry tables, thermal warnings, the final 3-D pressure wireframe, and an
+telemetry tables, thermal warnings, the final 3-D chassis view, and an
 optional timestamped report (`cfd_report_<profile>_<timestamp>.txt`).
 
 ## MPI notes
@@ -135,7 +157,9 @@ Worker flags: `--profile K`, `--fan K`, `--sim-time T` (default 30),
 ## Configuration — `server_configs.json`
 
 Written automatically with the built-in example on first run
-(`./run.sh --write-config` regenerates it; `--config PATH` points elsewhere).
+(`./run.sh --write-config` regenerates it; `--config PATH` points
+elsewhere). The wizard writes to it in exactly one case: *Custom Server
+Configuration* appends new profiles; the hardware prompts never touch it.
 
 ### Profiles
 
@@ -185,13 +209,18 @@ Standard zones are generated from plain numbers: drive cage (optional —
     "zeta": 55.0,                      // porous: loss coeff. over the zone z-length
     "permeability": 1e-7,              // porous: Darcy K [m^2]
     "label": "QSFP CAGE",              // optional, drawn on the dashboard
-    "telemetry": "optics" }            // optional: cpu | gpu | optics checks
+    "telemetry": "optics",             // optional: cpu | gpu | optics checks
+    "fan_rpm": 15000,                  // optional pair: zone carries its own fan
+    "fan_size_mm": 40 }                //   (PSUs) — drawn in gold, not solved
 ]
 ```
 
 Zones may sit on either side of the fan wall but must not straddle it, and
 porous zones must not overlap another zone (touching faces are fine) — the
-config is validated at startup. Per-profile `requirements`
+config is validated at startup. A zone with `fan_rpm`/`fan_size_mm` (the
+PSUs) gets the gold fan marker on its rear face in the 3-D view — a drawn
+annotation, not a momentum source; the PSU brick itself is the impedance.
+Per-profile `requirements`
 (`cpu/gpu/optics_min_airflow_ms`) drive the post-run thermal checks, and
 `mesh_settings` holds the per-preset element sizes.
 
@@ -200,9 +229,9 @@ config is validated at startup. Per-profile `requirements`
 - `velocity.vtu` / `pressure.vtu` / `zones.vtu` time series (plus
   `*_pN_*.vtu` / `.pvtu` piece files from the MPI ranks) — open the `.pvtu`
   or `.vtu` in ParaView.
-- `cfd_report_<profile>_<timestamp>.txt` — profile, fan, telemetry,
-  warnings, and ANSI-free copies of the dashboard cross-section and the 3-D
-  pressure wireframe.
+- `cfd_report_<profile>_<timestamp>.txt` — profile, fan, the hardware
+  answers used for the run, telemetry, warnings, and ANSI-free copies of
+  the dashboard cross-section and the 3-D chassis view.
 
 ## Physics, briefly
 
@@ -235,8 +264,9 @@ tool at engineering accuracy — not a validated thermal-certification tool.
 - **First start is slow** — one-off `pip install rich psutil` inside the
   container, then mesh + JIT compilation before the first frame (the
   launcher waits up to 7 minutes before giving up).
-- **`fine`/`ultra` presets** — mind the RAM table; the MemTotal guard will
-  ask before letting you overcommit.
+- **`fine`/`ultra` presets** — mind the RAM table; the MemTotal guard asks
+  before letting `fine` overcommit, while `ultra` under 32 GB halts with
+  `MemoryError` by design.
 - **SELinux (Fedora/RHEL)** — the mount uses `:z` relabelling; if you run
   the container manually, keep that flag.
 - **macOS: "VM is not running"** — start the engine's VM first:
