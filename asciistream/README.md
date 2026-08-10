@@ -187,6 +187,9 @@ sixel without advertising it), `ASCIISTREAM_SIXEL=0` disables it. Without
 sixel `[v]` prints a one-line reason and stays on the 2-D view; the ASCII
 chassis view still prints post-run and in the report either way.
 
+Example Image of the 3D Sixel rendering
+<img width="1256" height="1301" alt="Screenshot_20260810_193904" src="https://github.com/user-attachments/assets/4721950a-6604-4367-8eb9-cbc97a9ef360" />
+
 ## Scripted / headless runs
 
 The solver core is runnable without the TUI. Single rank through the
