@@ -1,4 +1,4 @@
-# ASCIISTREAM v0.7
+# ASCIISTREAM v0.8
 
 **Terminal CFD for server chassis.** Watch the airflow through a Supermicro
 2U, a Dell GPU node or an Arista switch as a live ASCII particle field —
@@ -23,11 +23,14 @@ Docker.
   WORKERS** strip — braille history graphs and meters (psutil) scoped to
   the solver's own processes only: summed USS memory and CPU normalised
   to their affinity pool, never global system telemetry.
-- **High-fidelity 3-D view (sixel + gnuplot)** — press `v` (or `2`/`3`) on
+- **High-fidelity 3-D scene (sixel + gnuplot)** — press `v` (or `2`/`3`) on
   a sixel-capable terminal and the main pane becomes a true raster `splot`
-  of the mid-height pressure surface (height = P, colour = local |u|),
-  re-rendered through gnuplot's `sixelgd` terminal as the solve streams;
-  without sixel support `v` stays on the 2-D top-down view and says why.
+  of the chassis in physical metres: the component boxes, shell and gold
+  fan wall in wireframe around one smooth interpolated mid-height flow
+  plane coloured by air speed on the classic CFD rainbow — rotatable live
+  with WASD/arrow keys — re-rendered through gnuplot's `sixelgd` terminal
+  as the solve streams; without sixel support `v` stays on the 2-D
+  top-down view and says why.
 - **ASCII 3-D chassis view** — the CAD-style isometric projection of the
   physical chassis (component boxes extruded in ASCII, top faces coloured
   by local air speed, the fan wall and PSU fans picked out in gold) is
@@ -156,11 +159,25 @@ allows it:
    the clean fallback
 2. `gnuplot-nox` is apt-installed inside the container on first use (~30 s
    per fresh container, overlapping the mesh build and JIT wait)
-3. every new solver frame is dumped to a temp `.dat` and re-plotted
-   through gnuplot's `sixelgd` terminal: a 3-D surface of the mid-height
-   pressure field, colour-mapped by local air speed with the dashboard's
-   CFD palette, sized to the pane via the terminal's reported cell pixels
-4. the rich dashboard is suspended while the image pane is up (a raster
+3. the scene is the physical chassis: gnuplot's axes are the chassis
+   dimensions in metres (`set view equal xy`, footprint true to scale),
+   and every component box — drive cage, CPUs, DIMM banks, PCIe cards,
+   PSUs, custom zones — is drawn as gray wireframe edges inside the
+   shell outline, the fan wall picked out in gold and labels on the
+   larger components; it is built from the same geometry source as the
+   ASCII isometric view, so the two renderers cannot disagree about
+   what hardware exists
+4. every new solver frame re-plots the mid-height slice of the field as
+   one smooth interpolated pm3d plane, coloured by local air speed on
+   the classic blue→cyan→green→yellow→red CFD palette (solid components
+   carve real holes in the plane), sized to the pane via the terminal's
+   reported cell pixels
+5. the view rotates live: `w`/`s` (or ↑/↓) step elevation ±10° within
+   0–90°, `a`/`d` (or ←/→) step azimuth around the full circle and `r`
+   resets to the default 55°/205°; the header shows the live `el`/`az`
+   readout plus the key help, and a rotation re-render reuses every
+   cached geometry file — only gnuplot re-runs
+6. the rich dashboard is suspended while the image pane is up (a raster
    image and a diff-repainting TUI cannot share the screen) — the
    FRONT/REAR minis and the CFD WORKERS strip keep painting around it,
    and `[v]` drops back to the particle view
