@@ -1,0 +1,28 @@
+# ==============================================================================
+#  ASCIISTREAM host viewer environment (requirements-viewer.txt)
+#
+#  Installed into .venv-viewer/ by ./setup_host_viewer.sh, using Homebrew
+#  CPython 3.12 (/opt/homebrew/opt/python@3.12/bin/python3.12): vtk,
+#  pyvista and PyQt5 publish NO CPython 3.14 wheels, so the system python3
+#  cannot host this stack.
+#
+#  The heavy GUI packages are pinned EXACTLY to the wheel versions verified
+#  available for macOS arm64 / cp312 (2026-08), so a future resolver run
+#  cannot silently drift onto an untested combination. numpy/rich/pytest
+#  are constrained by compatible ranges instead - they follow semver and
+#  the code only needs their stable APIs.
+# ==============================================================================
+
+# --- exercised by the host test suite (tests/) --------------------------------
+numpy>=1.26,<3
+rich>=13,<15
+pytest>=8,<9
+
+# --- 3-D viewer sidecar stack (exact pins, verified wheels) -------------------
+vtk==9.6.2
+pyvista==0.48.4
+pyvistaqt==0.12.0
+PyQt5==5.15.11
+meshio==5.3.5
+DracoPy==2.0.0
+trimesh==5.0.0

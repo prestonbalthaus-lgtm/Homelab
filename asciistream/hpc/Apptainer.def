@@ -1,0 +1,254 @@
+# ============================================================================
+#  asciistream HPC image -- FEniCSx/dolfinx solver stack for bare-metal
+#  Slurm + InfiniBand execution (roadmap.md Phase 2).
+#
+#  Build (needs root or user namespaces; typically 1-2 h, network required,
+#  MUST be built on x86-64 -- the target nodes are Rocky Linux x86-64):
+#
+#      sudo apptainer build asciistream-hpc.sif hpc/Apptainer.def
+#      # or, unprivileged where user namespaces are enabled:
+#      apptainer build --fakeroot asciistream-hpc.sif hpc/Apptainer.def
+#
+#  Run (batch): generate a job script with hpc/sbatch_gen.py -- see
+#  hpc/README.md. The image contains NO copy of the solver source; bind the
+#  repo checkout at /work and an output dir at /out, exactly as the
+#  generated script does.
+#
+#  --------------------------------------------------------------------------
+#  HONESTY / PROVENANCE -- read before trusting this file
+#  --------------------------------------------------------------------------
+#  This definition has NEVER been built or executed: the machine it was
+#  written on is macOS/arm64 with no Apptainer, no Slurm and no InfiniBand.
+#  Every step is annotated below as either VERIFIED (checked by inspecting
+#  the actual base images with docker on 2026-08-11) or ASSUMPTION
+#  (best-informed, unverifiable here). The full assumption list is in
+#  hpc/README.md.
+#
+#  Why this base image and not dolfinx/dolfinx:stable (which run.sh uses)?
+#  VERIFIED: dolfinx/dolfinx:stable ships MPICH 5.0.1 (ch4:ofi) with an
+#  EMBEDDED libfabric 1.20 whose registered providers are only
+#  shm/sm2/rxm/mrail/rxd/udp/sockets/tcp -- no verbs provider registers at
+#  runtime, and there is no UCX and no libibverbs in the image at all
+#  (verified on the arm64 variant; amd64 is built from the same Dockerfile).
+#  That image is therefore PHYSICALLY INCAPABLE of RDMA -- no bind-mount of
+#  host OFED libraries can add a provider that was never compiled in; it
+#  would silently run inter-node traffic over TCP, which is exactly the
+#  failure mode this file exists to prevent.
+#
+#  VERIFIED about the base used here, dolfinx/dev-env:v0.11.0-openmpi
+#  (amd64, digest sha256:02d4ef2b87a8...):
+#    * Ubuntu 24.04, Open MPI 5.0.10 source-built into /usr/local with its
+#      bundled PMIx (libpmix.so.2) and PRRTE,
+#    * but built WITHOUT UCX: `ompi_info` lists pml ob1/cm/v and btl
+#      self/sm/tcp only, and no libibverbs -- hence the UCX + Open MPI
+#      rebuild below,
+#    * PETSc 3.25.1 at /usr/local/petsc with 6 arches; the solver uses
+#      PETSC_ARCH=linux-gnu-real64-32 which DOES contain hypre 3.1.0
+#      (chassis_cfd.py uses PCHYPRE/boomeramg) and MUMPS,
+#    * parallel HDF5, Boost, pugixml, spdlog, Catch2 in place,
+#    * python venv /dolfinx-env: mpi4py 4.1.2, petsc4py 3.25.1,
+#      gmsh 4.15.2, numpy 2.4.6 -- the same versions as dolfinx:stable,
+#    * NO dolfinx itself (it is the *build* env) -- built from source below,
+#      pinned to the exact versions verified in dolfinx/dolfinx:stable:
+#      basix 0.11.0, ufl 2026.1.0, ffcx 0.11.0, dolfinx 0.11.0.post0.
+# ============================================================================
+
+Bootstrap: docker
+From: dolfinx/dev-env:v0.11.0-openmpi
+
+%labels
+    Maintainer  asciistream
+    Purpose     asciistream CFD solver for Slurm/InfiniBand clusters
+    BaseImage   dolfinx/dev-env:v0.11.0-openmpi
+    OpenMPI     5.0.10 (rebuilt in %post with UCX+Slurm support)
+    Dolfinx     0.11.0 (source build, real64-32)
+    TestedOnCluster  NO - never built or run on real HPC hardware
+
+%post
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+
+    # Base-image toolchain env (the docker ENV is not reliably present in
+    # %post, so set explicitly -- values VERIFIED from the base image):
+    export PATH=/dolfinx-env/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    export VIRTUAL_ENV=/dolfinx-env
+    export PETSC_DIR=/usr/local/petsc
+    export PETSC_ARCH=linux-gnu-real64-32
+
+    # ------------------------------------------------------------------
+    # 1. RDMA userspace + build/runtime packages
+    # ------------------------------------------------------------------
+    # The container ships its OWN rdma-core/libibverbs ("hybrid model"):
+    # the kernel uverbs ABI is stable, so a container rdma-core works on a
+    # host running Mellanox OFED kernel modules -- this is how NVIDIA HPC
+    # containers operate. ASSUMPTION: package names are Ubuntu 24.04
+    # (verified base OS) but the install itself is untested. The mlx5
+    # userspace provider in ibverbs-providers supports ConnectX-4
+    # (MCX-456A). xvfb/libgl are for VTK *offline* rendering (below).
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        rdma-core libibverbs1 libibverbs-dev ibverbs-providers \
+        ibverbs-utils librdmacm1 librdmacm-dev rdma-core \
+        libnuma1 libnuma-dev numactl \
+        xvfb libgl1 libglx-mesa0 libgl1-mesa-dri libxrender1 \
+        libsm6 libxext6 \
+        ninja-build cmake git wget ca-certificates pkg-config bzip2
+    rm -rf /var/lib/apt/lists/*
+
+    mkdir -p /tmp/hpcbuild
+    cd /tmp/hpcbuild
+
+    # ------------------------------------------------------------------
+    # 2. UCX (the RDMA transport Open MPI will use)
+    # ------------------------------------------------------------------
+    # ASSUMPTION: UCX 1.18.x is current-stable and supports ConnectX-4 via
+    # rc/dc/ud verbs + mlx5 direct-verbs acceleration. The in-container UCX
+    # does NOT need to version-match the host's UCX in this launch model
+    # (srun+PMIx: no host MPI/UCX library ever loads into our processes);
+    # it needs only (a) the mlx5 provider available in-container -- step 1
+    # -- and (b) /dev/infiniband + /sys/class/infiniband visible at
+    # runtime (the generated sbatch binds them). See hpc/README.md for the
+    # bind-model alternative where version matching DOES bite.
+    UCX_VERSION=1.18.1
+    wget -q "https://github.com/openucx/ucx/releases/download/v${UCX_VERSION}/ucx-${UCX_VERSION}.tar.gz"
+    tar xzf "ucx-${UCX_VERSION}.tar.gz"
+    cd "ucx-${UCX_VERSION}"
+    ./configure --prefix=/usr/local \
+        --enable-mt --enable-cma \
+        --with-verbs --with-rdmacm --with-mlx5-dv \
+        --without-cuda --without-java --without-go
+    make -j"$(nproc)"
+    make install
+    ldconfig
+    cd /tmp/hpcbuild
+
+    # ------------------------------------------------------------------
+    # 3. Rebuild Open MPI 5.0.10 -- same version, now with UCX + Slurm
+    # ------------------------------------------------------------------
+    # The base image's Open MPI 5.0.10 lacks UCX (VERIFIED via ompi_info),
+    # so MPI traffic would fall back to the tcp BTL. Rebuilding the EXACT
+    # same upstream version into the same prefix keeps the library ABI
+    # (libmpi.so.40) that the already-built PETSc/HDF5/mpi4py/petsc4py in
+    # this image link against, while adding pml/ucx.
+    # ASSUMPTION (flagged, unverifiable here): a same-version rebuild with
+    # extra MCA components is ABI-identical in the way that matters; this
+    # is standard Open MPI versioning policy but has not been tested.
+    # --with-slurm builds the Slurm support (no Slurm headers required);
+    # PMIx/PRRTE/hwloc/libevent stay internal, mirroring the original
+    # build (VERIFIED: base has bundled libpmix.so.2/libprrte.so.3).
+    OMPI_VERSION=5.0.10
+    wget -q "https://download.open-mpi.org/release/open-mpi/v5.0/openmpi-${OMPI_VERSION}.tar.bz2"
+    tar xjf "openmpi-${OMPI_VERSION}.tar.bz2"
+    cd "openmpi-${OMPI_VERSION}"
+    ./configure --prefix=/usr/local \
+        --with-ucx=/usr/local \
+        --with-slurm \
+        --with-pmix=internal --with-hwloc=internal \
+        --with-libevent=internal
+    make -j"$(nproc)"
+    make install
+    ldconfig
+    cd /tmp/hpcbuild
+
+    # Fail the BUILD, not the first cluster job, if UCX support did not
+    # make it into Open MPI:
+    ompi_info | grep -qi ucx || {
+        echo "FATAL: rebuilt Open MPI has no UCX component" >&2; exit 1; }
+
+    # ------------------------------------------------------------------
+    # 4. FEniCSx stack, pinned to the versions verified in
+    #    dolfinx/dolfinx:stable (basix 0.11.0 / ufl 2026.1.0 /
+    #    ffcx 0.11.0 / dolfinx 0.11.0.post0, real64-32 PETSc arch)
+    # ------------------------------------------------------------------
+    # ASSUMPTION: build steps are modelled on the upstream dolfinx
+    # end-user Dockerfile (basix C++ then python, ufl+ffcx from PyPI,
+    # dolfinx C++ into /usr/local/dolfinx-real, then the python layer).
+    # Deviation from upstream, on purpose: the dolfinx python package is
+    # installed straight into the /dolfinx-env venv instead of a separate
+    # --prefix tree, so no PYTHONPATH juggling is needed at runtime.
+    pip install --no-cache-dir nanobind==2.12.0 "scikit-build-core[pyproject]"
+
+    git clone --depth 1 --branch v0.11.0 https://github.com/FEniCS/basix.git
+    cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -B basix/build -S basix/cpp
+    cmake --build basix/build
+    cmake --install basix/build
+    pip install --no-cache-dir --no-build-isolation ./basix/python
+
+    pip install --no-cache-dir fenics-ufl==2026.1.0 fenics-ffcx==0.11.0
+
+    # ASSUMPTION: the 0.11.0.post0 release is tagged v0.11.0.post0
+    # (fallback to v0.11.0 -- the .post0 suffix is a packaging-only bump).
+    git clone --depth 1 --branch v0.11.0.post0 \
+        https://github.com/FEniCS/dolfinx.git \
+    || git clone --depth 1 --branch v0.11.0 \
+        https://github.com/FEniCS/dolfinx.git
+    cmake -G Ninja -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local/dolfinx-real \
+        -B dolfinx/build -S dolfinx/cpp
+    cmake --build dolfinx/build
+    cmake --install dolfinx/build
+    ldconfig
+    CMAKE_PREFIX_PATH=/usr/local/dolfinx-real/lib/cmake \
+    LD_LIBRARY_PATH=/usr/local/dolfinx-real/lib \
+        pip install --no-cache-dir --no-build-isolation ./dolfinx/python
+
+    # ------------------------------------------------------------------
+    # 5. PyVista/VTK for OFFLINE rendering of the VTU/PVTU output
+    # ------------------------------------------------------------------
+    # Batch nodes have no display: render under xvfb-run, or call
+    # pyvista.start_xvfb() / set PYVISTA_OFF_SCREEN=true in your script.
+    # (Alternative if xvfb is unwanted: the OSMesa VTK wheel --
+    # pip install vtk-osmesa --extra-index-url https://wheels.vtk.org --
+    # renders with no X at all. Left out here to keep one code path.)
+    # ASSUMPTION: unpinned pyvista/vtk resolve and import cleanly.
+    pip install --no-cache-dir pyvista
+
+    cd /
+    rm -rf /tmp/hpcbuild
+
+%environment
+    # Mirrors the env of dolfinx/dolfinx:stable (VERIFIED via docker
+    # inspect), minus the PYTHONPATH indirection -- dolfinx python was
+    # installed into the venv directly.
+    export VIRTUAL_ENV=/dolfinx-env
+    export PATH=/dolfinx-env/bin:/usr/local/bin:$PATH
+    export PETSC_DIR=/usr/local/petsc
+    export PETSC_ARCH=linux-gnu-real64-32
+    export LD_LIBRARY_PATH=/usr/local/dolfinx-real/lib:/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+    export OPENBLAS_NUM_THREADS=1
+    export OPENBLAS_VERBOSE=0
+
+%test
+    # Presence checks only -- the build host has no InfiniBand, so this
+    # cannot and does not claim to validate RDMA.
+    python3 -c "import dolfinx; print('dolfinx', dolfinx.__version__)"
+    python3 -c "from mpi4py import MPI; print(MPI.Get_library_version().splitlines()[0])"
+    python3 -c "import gmsh, numpy, pyvista; print('gmsh+numpy+pyvista ok')"
+    ompi_info | grep -i ucx
+    ucx_info -v
+
+%runscript
+    # The image is a runtime, not an app: the generated sbatch script
+    # calls `apptainer exec ... python3 /work/chassis_cfd.py --worker ...`.
+    exec "$@"
+
+%help
+    asciistream CFD solver stack for Slurm + InfiniBand clusters.
+
+    Contents: dolfinx 0.11.0 (real64-32) + PETSc 3.25.1 (hypre, MUMPS)
+    + gmsh + numpy + mpi4py + Open MPI 5.0.10 (UCX 1.18.1, PMIx, Slurm)
+    + PyVista/VTK (offline rendering via xvfb).
+
+    Build:   sudo apptainer build asciistream-hpc.sif hpc/Apptainer.def
+             (or: apptainer build --fakeroot ...)
+    Use:     generate a job script with hpc/sbatch_gen.py; it binds the
+             repo at /work, an output dir at /out, /dev/infiniband and
+             /sys/class/infiniband, and launches ranks with
+             `srun --mpi=pmix apptainer exec ...`.
+
+    WARNING: this image has never been built or executed on a real
+    cluster. Verify RDMA engages before trusting performance numbers:
+        apptainer exec asciistream-hpc.sif ucx_info -d | grep Transport
+    must list rc/dc transports on an IB node, and jobs run with
+    OMPI_MCA_pml=ucx so they abort loudly instead of silently using TCP.
+    See hpc/README.md for what must version-match on YOUR site.

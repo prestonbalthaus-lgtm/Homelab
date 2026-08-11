@@ -1,4 +1,4 @@
-# ASCIISTREAM v0.8
+# ASCIISTREAM v0.9.1
 
 **Terminal CFD for server chassis.** Watch the airflow through a Supermicro
 2U, a Dell GPU node or an Arista switch as a live ASCII particle field —
@@ -14,28 +14,136 @@ Docker.
 ./run.sh
 ```
 
+---
+
+## What's new in this update
+
+A large round: three geometry/solver bug fixes plus four new capabilities.
+Everything below is additive — existing runs behave exactly as before
+unless you opt into the new modes.
+
+**Bug fixes**
+
+- **Dell C4130 could not be modelled with any PCIe card fitted.** Adding a
+  card raised `ValueError: riser 'riser_left' overlaps 'pcie_card_1'`, and
+  behind it a second `porous zone 'gpu_1' overlaps solid 'pcie_card_1'`.
+  Root cause: card x-placement was hardcoded to span the full chassis
+  width, so it collided with anything else in the rear. Cards now honour an
+  optional per-profile `pcie_x_band`, C4130's risers moved to the chassis
+  sides, and its four GPUs moved out of the rear PCIe slots into the
+  **front compute bay** (z = 0.105–0.215 m) where they belong.
+- **A diskless server could not be selected.** The geometry layer has
+  always supported `drive_bay_count: 0`; only the wizard's drive prompt
+  blocked it (`choices=["1","2"]`). It now offers **[0] No drives**.
+- **Dell R640 PSUs were 74 mm stubs.** They are now full-depth 0.25 m
+  blocks extending forward from the rear plane, narrowed to 62 mm so they
+  flank the riser cage the way a real R640 does — and each one now drives a
+  **solved 40 mm internal fan momentum source** (≈118 Pa over 0.25 m)
+  rather than being a drawn annotation. Opt-in per zone via
+  `fan_momentum: true`, so every other profile is untouched.
+
+**New**
+
+- **Acoustic / dBA target mode** — see below. The homelab question:
+  *will this box cook itself if I hold it to 45 dBA?*
+- **Variable PCIe card count** — the wizard asks how many cards are
+  installed (capped by the profile's `pcie_max_slots`) instead of a binary
+  GPU/NIC toggle, then how many of those are GPUs for the heat load.
+- **Seven enterprise fan profiles** (Dell PowerEdge 1U/2U, HPE ProLiant
+  DL360/DL380 Gen10) — **class-representative estimates, not vendor data**;
+  see the note under *Fans*.
+- **Fluid streamtubes** in the 3-D viewers — smooth, seeded by local air
+  speed, clipped strictly to the fluid domain.
+
+## Acoustic / dBA target mode
+
+Homelab servers usually live somewhere you can hear them. Give the wizard a
+noise ceiling — or pass `--dba-target 45` — and the solver inverts the same
+acoustic law the telemetry table already uses
+(`dBA = dBA_rated + 50·log₁₀(duty)`, combined across N fans as
+`+10·log₁₀(N)`) to find the highest fan duty that stays under your limit,
+clamps the fan curve to it, and then tells you whether the airflow you have
+left is still enough.
+
+Measured on a Supermicro 6029U with 4× FAN-0118L4 (60.5 dBA rated, so
+66.5 dBA at full tilt):
+
+| Ceiling | Permitted duty | Fan operating estimate | Solved q_out |
+|---|---|---|---|
+| none | 100 % | 129.0 CFM | 74.5 CFM |
+| 65 dBA (rack room) | 93.2 % | 120.3 CFM | 69.4 CFM |
+| 45 dBA (living room) | **37.1 %** | 47.9 CFM | **27.6 CFM** |
+
+At 45 dBA that chassis no longer holds its exhaust ceiling, and the run
+report says so outright:
+
+```
+[THERMAL WARNING: 45 dBA noise limit starves the chassis] exhaust 36.9 degC
+exceeds the 35.0 degC ceiling (solved energy equation). Raise the dBA limit,
+cut the heat load, or accept throttling.
+```
+
+Combine it with `--thermal on` for a hot-spot-aware answer; without the
+energy equation the verdict falls back to the bulk balance and says so.
+
+**Two honest limits.** The 50·log₁₀ law has **no noise floor**, so the model
+will happily "meet" a 30 dBA target at a duty a real fan cannot reach —
+treat very low ceilings as optimistic. And fans with no rated dBA
+(including custom fans) cannot be solved for at all; the mode is skipped
+with a reason rather than guessing.
+
 ## Features
 
 - **Live ASCII dashboard** — 2-D mid-plane streaklines (`.` stagnant → `~`
   slow → `-` moderate → `*` fast, green = healthy flow, red = dead zone),
-  labelled geometry (`[ CPU 1 ]`, `[ RAM ]`, `[ PCIe ]`, `[ FAN WALL ]`),
+  labelled geometry (`[ CPU 1 ]`, `[ RAM ]`, `[ PCIe ]`, `[ RISER ]`,
+  `[ DRIVES ]`, `[ FAN WALL ]` — `[ PCIe ]` only when cards are fitted),
   front/rear cross-section panes and a full-width btop-style **CFD
   WORKERS** strip — braille history graphs and meters (psutil) scoped to
   the solver's own processes only: summed USS memory and CPU normalised
   to their affinity pool, never global system telemetry.
-- **High-fidelity 3-D scene (sixel + gnuplot)** — press `v` (or `2`/`3`) on
-  a sixel-capable terminal and the main pane becomes a true raster `splot`
-  of the chassis in physical metres: the component boxes, shell and gold
-  fan wall in wireframe around one smooth interpolated mid-height flow
-  plane coloured by air speed on the classic CFD rainbow — rotatable live
-  with WASD/arrow keys — re-rendered through gnuplot's `sixelgd` terminal
-  as the solve streams; without sixel support `v` stays on the 2-D
-  top-down view and says why.
+- **Pop-out 3-D viewer (PyVista/Qt)** — press `p` in the dashboard and a
+  native, mouse-rotatable PyVista window opens **on the host**, next to
+  the container: the chassis hardware drawn from the solver's per-cell
+  zone tags, the flow coloured by air speed on the classic CFD rainbow,
+  live-refreshed as the solve streams and switched to the final full
+  export when the run completes. Provisioned once with
+  `./setup_host_viewer.sh`; entirely optional — without it `p` prints a
+  one-line reason and everything else works as before.
+- **Dual engine — fast 2-D planar / heavy 3-D volumetric** — chosen in the
+  wizard or with `--engine`. The 2-D engine is a genuine planar
+  formulation on the mid-height slice (~13× fewer cells, ~26× quicker),
+  not a cheaper render of the 3-D solve; the engine used is recorded in
+  every run report along with its over-prediction caveat.
+- **Energy equation (ΔT)** — `--thermal on` (or the wizard prompt) solves
+  real temperature transport instead of a bulk balance: the system wattage
+  becomes volumetric heat sources on the CPU/GPU/optics regions, and the
+  run reports the solved exhaust temperature, the peak hot spot, and an
+  energy audit confirming the injected watts match the configured load.
+  A `temperature` field joins the VTU and viewer exports.
+- **Fan Affinity Laws** — `--fan-duty` scales the quadratic fan curve by
+  RPM fraction (flow ∝ N, pressure ∝ N², power ∝ N³, dBA ≈ +50·log₁₀ N)
+  before the operating point, replacing the old fixed 100 %-duty
+  assumption; the acoustics/power table follows the chosen duty.
+- **3-D spatial labels** — the pop-out scene is annotated in place:
+  `FRONT (Intake / Drives)`, `BACK (Exhaust / PSUs)`, `Fan Wall`,
+  `CPU 1`/`CPU 2`, `RAM`, and the rest of the hardware, using the same
+  labels the ASCII renderer stamps so the two views cannot disagree.
+- **Optional CAD chassis assets** — drop a `.glb`/`.gltf` (Draco
+  compression supported) at `assets/<profile>.glb` and the viewer uses it
+  as the chassis boundary; with no asset — the normal case, none ship —
+  it builds the chassis procedurally from the solver's own geometry. See
+  `hardware_assets.py` for the search order and the scale/fit rule.
+- **Cluster tooling (`hpc/`)** — an Apptainer recipe and a Slurm `.sbatch`
+  generator for multi-node runs over InfiniBand. **Untested against real
+  HPC hardware** — see `hpc/README.md` for the itemised assumptions.
 - **ASCII 3-D chassis view** — the CAD-style isometric projection of the
   physical chassis (component boxes extruded in ASCII, top faces coloured
-  by local air speed, the fan wall and PSU fans picked out in gold) is
-  printed after every run and embedded in the text report — raster images
-  cannot live in a `.txt` file.
+  by local air speed, the fan wall and PSU fans picked out in gold):
+  press `v` (or `2`/`3`) to swap it into the main pane during the run; it
+  is printed after every run and embedded in the text report — raster
+  images cannot live in a `.txt` file — and it is the 3-D view for
+  remote/SSH-only sessions, where no host window can open.
 - **10 hardware profiles + custom** — rack servers, a 4×GPU node, two
   32×QSFP switches, a 6RU aggregation router and an ATX mid-tower, all
   generated parametrically from `server_configs.json` (no hardcoded
@@ -45,7 +153,11 @@ Docker.
 - **Hardware prompts** — every run asks drive type (2.5″ NVMe/SAS vs 3.5″
   HDD → drive-cage impedance), total system wattage, ambient intake and
   desired exhaust temperature, GPU count + wattage (meshed as PCIe cards,
-  watts joining the heat load) and a NIC slot. All runtime overrides —
+  watts joining the heat load) and a NIC slot. **The answers own the PCIe
+  population:** the card count is exactly GPUs + NIC, so declining both
+  leaves the slots empty — open air, with only the static riser cages
+  standing in the flow — rather than falling back to the profile's
+  default card count. All runtime overrides —
   `server_configs.json` on disk is never edited by them.
 - **Fan library + custom fan creator** — real 80 mm server fans and generic
   40/60/120 mm classes, or enter any max-CFM / max-mmH₂O pair in the wizard.
@@ -58,8 +170,9 @@ Docker.
 - **IT telemetry** — post-run airflow checks per component (CPU / GPU /
   optics) with `[THERMAL WARNING]` banners, a fan acoustics/power table, and
   an exportable plain-text run report.
-- **Real output files** — `velocity` / `pressure` / `zones` VTU series you
-  can open in ParaView.
+- **Real output files** — a final `velocity` / `pressure` / `zones` VTU
+  snapshot you can open in ParaView (plus periodic `viz_step_*` exports
+  while the host viewer is attached — see Outputs).
 
 ## Requirements
 
@@ -67,7 +180,8 @@ Docker.
 |---|---|
 | OS | Linux or macOS with **Podman** (preferred) or **Docker** |
 | CPU | x86-64 **and** ARM64 (Apple M-series, Graviton) — the image publishes both `linux/amd64` and `linux/arm64`, so pulls run natively on either |
-| Terminal | 100+ columns recommended; 24-bit colour (any modern emulator); a **sixel-capable** emulator (Konsole, foot, WezTerm, `xterm -ti vt340`, …) unlocks the gnuplot 3-D view — autodetected, `ASCIISTREAM_SIXEL=1/0` overrides |
+| Terminal | 100+ columns recommended; 24-bit colour (any modern emulator) |
+| 3-D viewer (optional) | a desktop session on the machine running `./run.sh` plus Homebrew CPython 3.12 for `./setup_host_viewer.sh` — remote/SSH-only runs skip it and keep the ASCII isometric view |
 | Disk | ~2 GB for the container image, a few MB per run for VTU output |
 | RAM | depends on mesh preset — see table below |
 
@@ -76,10 +190,10 @@ against **dolfinx 0.11.0** (the `dolfinx/dolfinx:stable` tag as of
 Aug 2026 — note `:stable` is a moving tag), which also provides gmsh,
 Open MPI, PETSc and numpy. The launcher pip-installs `rich` and `psutil`
 into the container on first start; `psutil` is optional (without it the
-dashboard just drops the CFD WORKERS telemetry strip). On sixel-capable
-terminals it also apt-installs `gnuplot-nox` inside the container for the
-3-D splot (first use per container, ~30 s, overlapping the mesh build;
-skipped entirely otherwise).
+dashboard just drops the CFD WORKERS telemetry strip). The pop-out 3-D
+viewer is the one component that lives on the **host** instead — a GUI
+cannot cross the container boundary — in its own `.venv-viewer/`
+(`./setup_host_viewer.sh`, once).
 
 Mesh presets (RAM guidance as shown in the wizard):
 
@@ -130,10 +244,12 @@ directory at `/work` and starts the wizard, which asks for:
    machine halts hard (table note above)
 
 Then the launcher spawns the MPI worker pool and the live dashboard runs
-until the simulated time is reached (`Ctrl+C` stops both). After the run:
-telemetry tables, thermal warnings, the final 3-D view (a sixel frame
-when the pipeline is active, the ASCII chassis view otherwise), and an
-optional timestamped report (`cfd_report_<profile>_<timestamp>.txt`).
+until the simulated time is reached (`Ctrl+C` stops both). During the run
+`v` (or `2`/`3`) toggles the main pane to the ASCII isometric chassis
+view and `p` pops out the interactive PyVista window (host viewer
+provisioned). After the run: telemetry tables, thermal warnings, the
+final ASCII 3-D chassis view, and an optional timestamped report
+(`cfd_report_<profile>_<timestamp>.txt`).
 
 ## MPI notes
 
@@ -148,47 +264,45 @@ optional timestamped report (`cfd_report_<profile>_<timestamp>.txt`).
 - Rank 0 builds the gmsh mesh, the mesh is distributed, all ranks solve; if
   the dashboard socket dies the solve continues and still writes the VTUs.
 
-## The sixel 3-D view
+## The pop-out 3-D viewer (PyVista)
 
-`[v]` upgrades the main pane to real raster graphics when the terminal
-allows it:
+Everything ASCIISTREAM computes runs inside the dolfinx container — but a
+GUI cannot cross the container boundary, so the interactive 3-D window is
+a **host-side sidecar** (`viewer_sidecar.py`) that talks to the
+containerized TUI through files in the shared work directory:
 
-1. the launcher queries the terminal (DA1) for sixel support — Konsole,
-   foot, WezTerm, mlterm and `xterm -ti vt340` all advertise it; tmux and
-   GNU screen swallow the query unless passthrough is enabled and land in
-   the clean fallback
-2. `gnuplot-nox` is apt-installed inside the container on first use (~30 s
-   per fresh container, overlapping the mesh build and JIT wait)
-3. the scene is the physical chassis: gnuplot's axes are the chassis
-   dimensions in metres (`set view equal xy`, footprint true to scale),
-   and every component box — drive cage, CPUs, DIMM banks, PCIe cards,
-   PSUs, custom zones — is drawn as gray wireframe edges inside the
-   shell outline, the fan wall picked out in gold and labels on the
-   larger components; it is built from the same geometry source as the
-   ASCII isometric view, so the two renderers cannot disagree about
-   what hardware exists
-4. every new solver frame re-plots the mid-height slice of the field as
-   one smooth interpolated pm3d plane, coloured by local air speed on
-   the classic blue→cyan→green→yellow→red CFD palette (solid components
-   carve real holes in the plane), sized to the pane via the terminal's
-   reported cell pixels
-5. the view rotates live: `w`/`s` (or ↑/↓) step elevation ±10° within
-   0–90°, `a`/`d` (or ←/→) step azimuth around the full circle and `r`
-   resets to the default 55°/205°; the header shows the live `el`/`az`
-   readout plus the key help, and a rotation re-render reuses every
-   cached geometry file — only gnuplot re-runs
-6. the rich dashboard is suspended while the image pane is up (a raster
-   image and a diff-repainting TUI cannot share the screen) — the
-   FRONT/REAR minis and the CFD WORKERS strip keep painting around it,
-   and `[v]` drops back to the particle view
+1. provision the host venv once: `./setup_host_viewer.sh` (Homebrew
+   CPython 3.12; installs vtk/pyvista/pyvistaqt/PyQt5 into
+   `.venv-viewer/`)
+2. `./run.sh` then starts the sidecar automatically next to the
+   container (log: `${TMPDIR:-/tmp}/asciistream-viewer.log`). It stays
+   **dormant** — no window, near-zero cost — and drops a
+   `.asciistream_viewer_ready` marker in the work dir, which tells the
+   launcher to enable the solver's periodic mid-run field export
+3. press **`p`** in the live dashboard: the TUI writes a trigger file,
+   the sidecar answers by opening a native PyVista/Qt window — chassis
+   hardware built from the solver's per-cell `zone` tags, flow coloured
+   by `|u|` on the classic blue→cyan→green→yellow→red CFD palette —
+   rotatable/zoomable with the usual PyVista mouse controls
+4. while the solve runs the window refreshes itself from
+   `viz_manifest.json`, the atomically-replaced manifest naming each
+   export's datasets (`viz_step_NNNNNN/` directories; only the two
+   newest are kept); when the run completes it switches to the final
+   full-resolution export
+5. closing the window returns the sidecar to dormant — `p` re-opens it;
+   the sidecar exits with `run.sh` (including `Ctrl+C`)
+6. optionally, drop a `.glb`/`.gltf` hardware-boundary model (Draco
+   compression supported) into the work directory and the viewer
+   overlays it on the chassis
 
-`ASCIISTREAM_SIXEL=1` forces the pipeline on (for terminals that render
-sixel without advertising it), `ASCIISTREAM_SIXEL=0` disables it. Without
-sixel `[v]` prints a one-line reason and stays on the 2-D view; the ASCII
-chassis view still prints post-run and in the report either way.
-
-Example Image of the 3D Sixel rendering
-<img width="1256" height="1301" alt="Screenshot_20260810_193904" src="https://github.com/user-attachments/assets/4721950a-6604-4367-8eb9-cbc97a9ef360" />
+The viewer never runs inside the container and structurally cannot slow
+the MPI solve — separate process, separate interpreter, separate OS
+namespace; the solver's only extra cost is the periodic export, which is
+enabled solely while a sidecar is attached. `ASCIISTREAM_VIEWER=0
+./run.sh` opts out entirely. Without the sidecar (no venv, opt-out, or a
+remote/SSH-only session with no desktop) `p` prints a one-line reason
+and `v` still gives the ASCII isometric 3-D view, which also prints
+post-run and embeds in the text report.
 
 ## Scripted / headless runs
 
@@ -217,6 +331,14 @@ Worker flags: `--profile K`, `--fan K`, `--sim-time T` (default 30),
 coarse; a number is a literal element size in millimetres, e.g.
 `--mesh 0.8`), `--config PATH`. Custom fan: `--fan custom --fan-cfm 95
 --fan-mmh2o 38`.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--engine 2d\|3d` | `3d` | 2-D solves only the mid-height slice: ~13× fewer cells and ~26× quicker, but it models no floor/ceiling friction so it over-predicts through-flow (+5 % near steady state on 6029U/coarse, more during the early transient). Explore in 2d, confirm in 3d. |
+| `--fan-duty F` | `1.0` | Fraction of rated RPM. Fan Affinity Laws applied before the operating point: flow ∝ N, pressure ∝ N², shaft power ∝ N³, dBA ≈ +50·log₁₀(N/N_rated). |
+| `--thermal on\|off` | `off` | Solve the energy equation (see **Physics**). Off is byte-identical to the pre-thermal solver. |
+| `--viz-every N` | `0` (off) | Export a field snapshot every N steps for the host viewer. The launcher sets this automatically when the viewer sidecar is attached. |
+| `--dba-target D` | none | Acoustic ceiling: combined free-field dBA for the whole fan wall. Caps fan duty to the loudest setting that stays under it (the quieter of this and `--fan-duty` wins). Unavailable for fans with no rated dBA. |
 
 ## Configuration — `server_configs.json`
 
@@ -252,6 +374,23 @@ Configuration* appends new profiles; the hardware prompts never touch it.
 | `generic-40mm-dual` | 40×56 mm dual-rotor (1U/switch class) | 22 CFM | 90.0 mmH₂O |
 | `generic-60mm` | 60×38 mm high-static (router class) | 38 CFM | 30.0 mmH₂O |
 | `generic-120mm` | 120×25 mm case fan (ATX class) | 72 CFM | 3.0 mmH₂O |
+| `dell-1u-std-40mm` | Dell PowerEdge 1U standard 40 mm *(est.)* | 19 CFM | 65.0 mmH₂O |
+| `dell-1u-hp-40mm` | Dell PowerEdge 1U high-perf 40 mm dual-rotor *(est.)* | 26 CFM | 120.0 mmH₂O |
+| `dell-2u-std-60mm` | Dell PowerEdge 2U standard 60 mm *(est.)* | 40 CFM | 28.0 mmH₂O |
+| `dell-2u-hp-60mm` | Dell PowerEdge 2U high-perf 60 mm *(est.)* | 55 CFM | 45.0 mmH₂O |
+| `hpe-dl360g10-hp-40mm` | HPE DL360 Gen10 high-perf (875284-001 class) *(est.)* | 24 CFM | 110.0 mmH₂O |
+| `hpe-dl380g10-std-60mm` | HPE DL380 Gen10 standard module *(est.)* | 42 CFM | 30.0 mmH₂O |
+| `hpe-dl380g10-hp-60mm` | HPE DL380 Gen10 high-perf module *(est.)* | 58 CFM | 48.0 mmH₂O |
+
+**The seven entries marked *(est.)* are class-representative engineering
+estimates, NOT vendor data.** Dell and HPE do not publish curves for these
+OEM fans, and none of these numbers were sourced from a datasheet — the
+part reference identifies which *class* the entry models, not a verified
+spec. They are internally consistent with each other and with the physics
+(40 mm dual-rotor: high static pressure, low flow, high RPM; 60 mm: more
+flow, less static), and are fine for comparing configurations — but do not
+size a real machine from them. The same caveat has always applied to the
+`generic-*` entries.
 
 The fan curve (quadratic, `P = Pmax·(1−(Q/Qmax)²)`, `fan_count` in parallel)
 is intersected with a ζ-based impedance *estimate* only to set the inlet
@@ -290,9 +429,22 @@ Per-profile `requirements`
 
 ## Outputs
 
-- `velocity.vtu` / `pressure.vtu` / `zones.vtu` time series (plus
-  `*_pN_*.vtu` / `.pvtu` piece files from the MPI ranks) — open the `.pvtu`
-  or `.vtu` in ParaView.
+- One **final snapshot** of `velocity` / `pressure` / `zones` (not a time
+  series): numbered `.pvtu` piece sets from the MPI ranks plus
+  rank-piece `.vtu` files. Note the bare `velocity.vtu` /
+  `pressure.vtu` / `zones.vtu` are PVD-style collection *indexes* — they
+  open in ParaView but carry no data themselves; load the `.pvtu` (or
+  follow `viz_manifest.json`, which names the exact data-carrying file
+  per field).
+- While the host viewer sidecar is attached: periodic mid-run
+  `viz_step_NNNNNN/` exports plus the atomically-updated
+  `viz_manifest.json` (only the two newest step directories are kept;
+  `"done": true` marks the final export). These feed the pop-out viewer
+  and the two helper scripts below.
+- `visualize.py` — headless PNG snapshot of the newest export
+  (`.venv-viewer/bin/python visualize.py`); `convert.py` — merges the
+  rank pieces into single `*_clean.vtu` files, one per field. Both are
+  manifest-driven and run under the host viewer venv.
 - `cfd_report_<profile>_<timestamp>.txt` — profile, fan, the hardware
   answers used for the run, telemetry, warnings, and ANSI-free copies of
   the dashboard cross-section and the 3-D chassis view.
@@ -306,10 +458,34 @@ Transient incompressible Navier–Stokes, incremental pressure-correction
 explicit treatment) for drive cages, heatsinks and porous custom zones, and
 three linear solves per step (GMRES+ILU tentative velocity, CG+BoomerAMG
 pressure Poisson, CG+Jacobi correction). Turbulence is a constant effective
-eddy viscosity (block-level electronics-cooling practice); the outlet
-temperature is the bulk balance T_in + P/(ρ·Q·c_p). The fan plane is imposed
-on two coincident boundary copies of a deliberately split mesh — an interior
-Dirichlet plane on continuous elements leaks flux.
+eddy viscosity (block-level electronics-cooling practice). The fan plane is
+imposed on two coincident boundary copies of a deliberately split mesh — an
+interior Dirichlet plane on continuous elements leaks flux.
+
+**Outlet temperature** is the bulk balance T_in + P/(ρ·Q·c_p) unless
+`--thermal on` is given, which adds a real **energy equation**: advection–
+diffusion of temperature coupled to the solved velocity, backward-Euler with
+the velocity lagged to uₙ, P1 elements, eddy diffusivity ν_eff/Pr_t
+(Pr_t = 0.9), GMRES + block-Jacobi/ILU (advection makes the operator
+nonsymmetric, so the CG+AMG used for the pressure Poisson does not apply).
+The profile's wattage becomes volumetric sources on the meshed heat
+regions — porous CPU heatsinks and any zone carrying `heat_w` — normalised
+by mesh-measured volumes so the injected power is exact. Wizard-fitted GPUs
+are meshed as **solid** PCIe cards and therefore have no interior cells, so
+their watts go into the 1 cm shell of fluid washing each card; if that shell
+is empty the share is folded back into the distributed remainder with a
+warning rather than silently vanishing. The run then reports the **solved**
+mass-flow-weighted exhaust temperature beside the bulk estimate, a hot-spot
+peak, and an energy audit (watts injected vs watts configured).
+
+The two exhaust figures are weighted differently on purpose: the bulk
+balance divides by the *net* outlet flux, while the solved mean is weighted
+by the *outgoing* flux only (max(u·n, 0)) — the temperature of air actually
+leaving. They agree once the flow settles and there is no outlet backflow;
+they diverge while q_out is still converging, or when recirculation makes
+the outgoing flux exceed the net. Net-flux weighting was tried first and
+abandoned: transient shedding in the 2-D wake can nearly cancel the outflow
+and produce a sub-inlet, unphysical mean.
 
 **Accuracy disclaimer:** chassis outer dimensions follow vendor specs, but
 internal layouts, ζ values and heat loads are documented engineering
@@ -326,17 +502,17 @@ tool at engineering accuracy — not a validated thermal-certification tool.
   24-bit-capable terminal for the CFD colormap.
 - **Garbled layout** — widen the terminal; 100+ columns recommended.
 - **First start is slow** — one-off `pip install rich psutil` inside the
-  container (plus `apt-get install gnuplot-nox`, ~30 s, on sixel
-  terminals), then mesh + JIT compilation before the first frame (the
+  container, then mesh + JIT compilation before the first frame (the
   launcher waits up to 7 minutes before giving up).
 - **`fine`/`ultra` presets** — mind the RAM table; the MemTotal guard asks
   before letting `fine` overcommit, while `ultra` under 32 GB halts with
   `MemoryError` by design.
-- **`3-D view: sixel off (...)`** — the terminal did not advertise sixel
-  in its DA1 reply, or gnuplot could not be installed. Konsole, foot,
-  WezTerm and `xterm -ti vt340` advertise it; tmux/screen need
-  passthrough enabled. `ASCIISTREAM_SIXEL=1 ./run.sh` forces the
-  pipeline on regardless.
+- **`p` says the host viewer is not attached** — run
+  `./setup_host_viewer.sh` once on the host, then restart `./run.sh`
+  (the sidecar starts with it). On remote/SSH-only sessions there is no
+  desktop for the window — use `v` for the ASCII isometric 3-D view.
+  The sidecar's log is at `${TMPDIR:-/tmp}/asciistream-viewer.log`;
+  `ASCIISTREAM_VIEWER=0 ./run.sh` disables the sidecar entirely.
 - **SELinux (Fedora/RHEL)** — the mount uses `:z` relabelling; if you run
   the container manually, keep that flag.
 - **macOS: "VM is not running"** — start the engine's VM first:
