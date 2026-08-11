@@ -187,29 +187,19 @@
    in the mid-height (u_x,u_z) plane - 2-D streaklines of that slice, not
    3-D pathlines. The status line shows simulated time, step, live outlet
    flow and cell count.
-   Pressing [v] (or 2/3) switches to the HIGH-FIDELITY 3-D VIEW: on a
-   sixel-capable terminal (DA1 feature 4 autodetect; ASCIISTREAM_SIXEL=1/0
-   forces/disables) the rich Live dashboard is SUSPENDED and a gnuplot
-   `splot` in PHYSICAL chassis coordinates - axes are the chassis metres
-   (x=length, y=width, z=HEIGHT, floor at 0), the streamed MID-HEIGHT
-   slice drawn as ONE smooth interpolated pm3d plane with the CFD field
-   mapped to COLOUR only (|u| on the classic blue->red CFD rainbow,
-   fixed 0..fan-plane scale), and the HARDWARE drawn in-scene: chassis
-   wireframe, fan wall outline and every component box (drive cage,
-   CPUs, DIMM banks, PCIe cards, PSUs) as labelled gray wireframe
-   blocks the coloured plane visibly passes through and around -
-   is rendered through the sixelgd terminal and blitted into the main
-   pane. WASD or the arrow keys rotate the scene live (10 degree steps:
-   w/s elevation clamped 0..90, a/d azimuth wrapping, r resets) - each
-   press re-runs gnuplot with the new `set view` on the cached geometry
-   and field files, so a rotation costs one subprocess call. The
-   FRONT/REAR minis and the telemetry strip repaint around the image
-   via direct cursor addressing (gnuplot-nox is apt-installed inside the
-   container on first use). When the terminal does not support sixel, or
-   a frame is rejected mid-run, [v] falls back to the 2-D top-down view.
-   The ASCII isometric chassis view (CAD-style extruded component boxes,
-   gold fan wall + PSU markers) remains the post-run console print and
-   the text-report renderer - raster images cannot live in a .txt file.
+   Pressing [v] (or 2/3) toggles the main pane to the ASCII ISOMETRIC
+   CHASSIS VIEW (CAD-style extruded component boxes, top faces coloured by
+   local air speed, gold fan wall + PSU markers) - the same renderer that
+   prints post-run and embeds in the text report, since raster images
+   cannot live in a .txt file. Pressing [p] pops out the OPTIONAL
+   interactive PyVista/Qt 3-D window: run.sh launches viewer_sidecar.py on
+   the HOST (a GUI cannot cross the container boundary), the sidecar drops
+   VIEWER_READY_FILE in the shared work dir - which switches the solver's
+   periodic viz export on - and [p] writes VIEWER_TRIGGER_FILE, which the
+   sidecar answers by opening the window and live-refreshing it from the
+   atomically-published viz_manifest.json exports. Without the sidecar
+   (no host venv, SSH-only session, ASCIISTREAM_VIEWER=0) [p] prints a
+   one-line reason and the ASCII isometric view remains the 3-D renderer.
    100+ column terminal recommended; Ctrl+C stops the dashboard (worker too).
 
  IT TELEMETRY & REPORTING (post-processing; config-driven)
@@ -246,7 +236,6 @@
 import io
 import json
 import os
-import re
 import shutil
 import socket
 import struct
@@ -405,23 +394,13 @@ TELEM_USS_SEC  = 1.0 # USS cadence - smaps_rollup reads for ~40 ranks are
 BRAILLE_L = (0x00, 0x40, 0x44, 0x46, 0x47)
 BRAILLE_R = (0x00, 0x80, 0xA0, 0xB0, 0xB8)
 
-# --- Sixel / gnuplot high-fidelity 3-D (launcher side) ------------------------
-SIXEL_ENV        = "ASCIISTREAM_SIXEL"  # "1"/"on" force, "0"/"off" disable,
-                                        # unset = DA1 terminal autodetect
-GNUPLOT_TIMEOUT  = 20.0                 # per-frame splot watchdog [s]
-CELL_PX_FALLBACK = (10, 20)             # terminal cell w,h [px] when the
-                                        # CSI 16 t query goes unanswered
-SIXEL_TOP_ROW    = 3                    # image origin row (below the header)
+# --- Volumetric slice stack (worker -> dashboard stream) ----------------------
 VOL_SLICE_FRACS  = (0.15, 0.50, 0.85)   # y/H of the horizontal slices the
                                         # worker exports (bottom/mid/top).
                                         # MUST contain 0.50 - the mid slice
                                         # is the classic 2-D plane the
-                                        # dashboard + report use AND the one
-                                        # plane the sixel view renders.
+                                        # dashboard + report use.
 VOL_MID_IDX      = VOL_SLICE_FRACS.index(0.50)   # loud failure if edited out
-SIXEL_VIEW_EL0   = 55.0    # `set view <elevation>, <azimuth>` defaults
-SIXEL_VIEW_AZ0   = 205.0
-SIXEL_VIEW_STEP  = 10.0    # degrees per WASD/arrow press in the 3-D view
 
 M3S_TO_CFM = 60.0 / 0.3048**3
 
@@ -3071,354 +3050,40 @@ def build_sys_panel(sample, cpu_hist, ram_hist, mem_total, width):
 
 
 # ==============================================================================
-#  SIXEL / GNUPLOT HIGH-FIDELITY 3-D PIPELINE (launcher side)
-#  Streamed mid-height slice -> temp .dat pm3d mesh in PHYSICAL chassis
-#  coordinates (axes = metres, CFD data = colour only) -> gnuplot
-#  `splot` through the sixelgd terminal -> raster blit into the main pane.
-#  rich cannot host a sixel blob (Live's diff repaints erase raster output
-#  every tick), so the sixel view suspends Live and owns the screen with
-#  cursor addressing.
+#  HOST VIEWER BRIDGE (launcher side - see viewer_sidecar.py)
+#  The interactive PyVista/Qt 3-D window is a separate HOST process: run.sh
+#  starts viewer_sidecar.py next to the container (a GUI cannot cross the
+#  container boundary), and the two sides talk ONLY through files in the
+#  bind-mounted work directory. The sidecar drops VIEWER_READY_FILE (defined
+#  with the viz-export constants above) while it is alive - that is what
+#  switches the solver's periodic mid-run export on. The [p] hotkey writes
+#  VIEWER_TRIGGER_FILE; the sidecar consumes it and opens its window.
+#  viewer_sidecar.py imports both names from here - single source.
 # ==============================================================================
 
-def _tty_query(seq, end_byte, timeout=0.35):
-    """Write an escape query to the controlling terminal and read the reply
-    (cbreak) until `end_byte` or timeout; b"" when there is no TTY or no
-    answer. MUST run before the key-watcher thread owns stdin, or the
-    reply gets eaten as keystrokes."""
+VIEWER_TRIGGER_FILE = ".asciistream_viewer_open"
+
+
+def request_host_viewer():
+    """[p] hotkey: ask the host-side PyVista sidecar to open its window.
+    Non-blocking by construction - one tiny write + atomic rename, called
+    from the key-watcher thread. Returns a one-line rich-markup message for
+    the dashboard loop to print (mirrors how the old 3-D fallback explained
+    itself when unavailable)."""
+    if not os.path.exists(VIEWER_READY_FILE):
+        return (" [yellow]3-D pop-out off - no host viewer sidecar is "
+                "attached (run ./setup_host_viewer.sh once on the host, "
+                "then restart ./run.sh)[/]")
     try:
-        import select
-        import termios
-        import tty
-    except ImportError:
-        return b""
-    if not (sys.stdin.isatty() and sys.stdout.isatty()):
-        return b""
-    fd = sys.stdin.fileno()
-    try:
-        old = termios.tcgetattr(fd)
-    except (termios.error, OSError):
-        return b""
-    buf = b""
-    try:
-        tty.setcbreak(fd)
-        sys.stdout.write(seq)
-        sys.stdout.flush()
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline and buf[-1:] != end_byte:
-            r, _, _ = select.select(
-                [fd], [], [], max(deadline - time.monotonic(), 0.01))
-            if not r:
-                break
-            chunk = os.read(fd, 64)
-            if not chunk:
-                break
-            buf += chunk
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
-    return buf
+        tmp = VIEWER_TRIGGER_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(f"{time.time():.3f}\n")
+        os.replace(tmp, VIEWER_TRIGGER_FILE)   # atomic on one filesystem
+    except OSError as exc:
+        return f" [yellow]could not signal the host viewer: {exc}[/]"
+    return (" [dim]host viewer signalled - the PyVista window opens on the "
+            "host desktop (log: $TMPDIR/asciistream-viewer.log)[/]")
 
-
-def parse_da1_sixel(reply):
-    """True when a DA1 reply (ESC[?<attrs>c) lists feature 4 = sixel
-    graphics. Token-exact: '14' or '22' must not count as '4'."""
-    m = re.search(rb"\[\?([0-9;]+)c", reply)
-    return bool(m) and b"4" in m.group(1).split(b";")
-
-
-def detect_sixel(console):
-    """(ok, why): ASCIISTREAM_SIXEL override first, DA1 autodetect second.
-    tmux/screen swallow both the query and sixel itself unless passthrough
-    is configured - they land in the clean fallback here."""
-    env = os.environ.get(SIXEL_ENV, "").strip().lower()
-    if env in ("0", "off", "no"):
-        return False, f"disabled via {SIXEL_ENV}"
-    if env in ("1", "on", "yes"):
-        return True, f"forced via {SIXEL_ENV}"
-    if not console.is_terminal:
-        return False, "not a terminal"
-    if parse_da1_sixel(_tty_query("\x1b[c", b"c")):
-        return True, "terminal advertises sixel (DA1 feature 4)"
-    return False, "terminal does not advertise sixel (DA1)"
-
-
-def detect_cell_px():
-    """Character cell size [px] via CSI 16 t (reply ESC[6;h;w t) so the
-    image can be sized to the pane; CELL_PX_FALLBACK when unanswered."""
-    m = re.search(rb"\[6;(\d+);(\d+)t", _tty_query("\x1b[16t", b"t"))
-    if m:
-        ch, cw = int(m.group(1)), int(m.group(2))
-        if 4 <= cw <= 40 and 6 <= ch <= 80:
-            return cw, ch
-    return CELL_PX_FALLBACK
-
-
-def ensure_gnuplot(console):
-    """gnuplot with the sixelgd terminal. The dolfinx container ships
-    without it, so first use apt-installs gnuplot-nox (root container,
-    overlaps the worker's mesh+JIT wait). False = stay on the fallback."""
-    def has_sixelgd():
-        # stdin MUST be cut off: with the launcher's pty as stdin gnuplot
-        # believes it is interactive, and `set terminal` then PAGES its
-        # list and blocks on a keypress until the timeout kills it - which
-        # silently disabled sixel on every real terminal while passing
-        # every pipe-fed test. GPVAL_TERMINALS never pages, on top.
-        try:
-            r = subprocess.run(["gnuplot", "-e", "print GPVAL_TERMINALS"],
-                               capture_output=True, timeout=10,
-                               stdin=subprocess.DEVNULL)
-            return b"sixelgd" in r.stdout + r.stderr
-        except (OSError, subprocess.TimeoutExpired):
-            return False
-
-    if shutil.which("gnuplot"):
-        return has_sixelgd()
-    apt = shutil.which("apt-get")
-    if apt and os.geteuid() == 0:
-        console.print(" [dim][setup] installing gnuplot for the sixel 3-D "
-                      "view (first run in this container)...[/dim]")
-        try:                       # DEVNULL: apt/dpkg must never find a
-            subprocess.run([apt, "update", "-qq"], capture_output=True,
-                           timeout=180, stdin=subprocess.DEVNULL)
-            subprocess.run([apt, "install", "-y", "-qq", "gnuplot-nox"],
-                           capture_output=True, timeout=180,
-                           stdin=subprocess.DEVNULL)   # tty to prompt on
-        except (OSError, subprocess.TimeoutExpired):
-            return False
-        return bool(shutil.which("gnuplot")) and has_sixelgd()
-    return False
-
-
-def write_field_dat(path, vol_speed, vol_press, y_levels, dims):
-    """Dump the MID-HEIGHT slice of the volumetric stack as a gnuplot pm3d
-    mesh in PHYSICAL chassis coordinates: 'x z y speed press' rows
-    (metres, m/s, Pa), y constant, one blank line between x-scanlines
-    (grid format `with pm3d` requires). Only this one plane is exported -
-    a multi-slice dump separates slices with the same single blank as
-    scanlines, so pm3d would weld the stack into one folded sheet. The
-    worker still streams all VOL_SLICE_FRACS levels (dashboard + ASCII
-    fallback consume them); the cut happens here, render-side only.
-    Solids sample as literal nan - under `set datafile missing 'nan'`
-    pm3d drops every quad touching a nan corner, which is the ONLY thing
-    carving component holes out of the plane."""
-    W, _h, L = dims
-    _nsl, rows, cols = vol_speed.shape
-    k = VOL_MID_IDX
-    xs = (np.arange(rows) + 0.5) * (W / rows)
-    zs = (np.arange(cols) + 0.5) * (L / cols)
-    y = float(y_levels[k])
-    with open(path, "w") as f:
-        f.write("# x[m] z[m] y[m] speed[m/s] P[Pa]  (mid-height pm3d mesh)\n")
-        for i in range(rows):
-            for j in range(cols):
-                f.write(f"{xs[i]:.4f} {zs[j]:.4f} {y:.4f} "
-                        f"{vol_speed[k, i, j]:.3f} "
-                        f"{vol_press[k, i, j]:.3f}\n")
-            f.write("\n")
-
-
-OBJ_EPS = 0.002   # axis-range padding [m]: faces lying exactly ON the
-                  # chassis boundary (rear PSUs end at z = L) get clipped
-                  # by gnuplot under tight ranges - pad, never shrink geo
-
-
-def _box_edges(b):
-    """The 12 edges of an axis-aligned box as corner-pair tuples. Edges,
-    not faces: gnuplot's gd-based terminals (sixelgd included) ignore the
-    fill colour AND alpha of `with polygons` and paint the faces with
-    whatever palette slot quantisation lands on - solid cyan/yellow
-    monoliths on screen (verified against pngcairo, which renders the
-    identical script correctly). Wireframe boxes via `with lines` are the
-    styling that survives sixelgd, and they read as the translucent
-    component blocks of commercial CFD tools on the dark background."""
-    x0, y0, z0, x1, y1, z1 = b
-    c = ((x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0),
-         (x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1))
-    return [(c[a], c[b2])
-            for a, b2 in ((0, 1), (1, 2), (2, 3), (3, 0),
-                          (4, 5), (5, 6), (6, 7), (7, 4),
-                          (0, 4), (1, 5), (2, 6), (3, 7))]
-
-
-def write_object_dats(workdir, geo):
-    """Static scene geometry for the sixel view, 'x z y' columns like
-    field.dat. Mirrors build_chassis_iso_panel's block collection (drive
-    cage + CPUs + porous zones + solids) so the raster and ASCII views can
-    never silently diverge on what hardware exists - that set already
-    carries the DIMM banks, PCIe cards and PSUs.
-
-      objects.dat  component box edges (wireframe), DOUBLE-blank separated
-      shell.dat    the 12 chassis edges, DOUBLE-blank separated (a single
-                   blank is only an isoline break - `with lines` would
-                   chain consecutive edges into corner-crossing diagonals)
-      fan.dat      fan wall outline at z = fan_z
-
-    Files are written once per run directory (geometry is run-static;
-    Stage 3's rotation re-renders lean on this cache) but the label list
-    is recomputed every call: (text, x, z, y) box-top centres, kept to
-    boxes with an explicit config label AND a footprint over ~1% of W*L
-    so per-DIMM noise stays off the plot."""
-    W, H, L = geo["dims"]
-    boxes = []
-    if geo["drives"]:
-        boxes.append(("drive_array", geo["drives"][1]))
-    for name, b, _k, _c in geo["cpus"]:
-        boxes.append((name, b))
-    for zone in geo["extra_porous"]:
-        boxes.append((zone["name"], zone["box"]))
-    for name, b in geo["solids"]:
-        boxes.append((name, b))
-    paths = {k: os.path.join(workdir, k + ".dat")
-             for k in ("objects", "shell", "fan")}
-    if not os.path.exists(paths["objects"]):
-        with open(paths["objects"], "w") as f:
-            f.write("# component box edges: x[m] z[m] y[m] (double-blank)\n")
-            for _name, b in boxes:
-                for p0, p1 in _box_edges(b):
-                    for x, y, z in (p0, p1):
-                        f.write(f"{x:.4f} {z:.4f} {y:.4f}\n")
-                    f.write("\n\n")
-        corners = ((0, 0, 0), (W, 0, 0), (W, H, 0), (0, H, 0),
-                   (0, 0, L), (W, 0, L), (W, H, L), (0, H, L))
-        edges = ((0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7),
-                 (7, 4), (0, 4), (1, 5), (2, 6), (3, 7))
-        with open(paths["shell"], "w") as f:
-            f.write("# chassis edges: x[m] z[m] y[m] (double-blank)\n")
-            for a, b2 in edges:
-                for x, y, z in (corners[a], corners[b2]):
-                    f.write(f"{x:.4f} {z:.4f} {y:.4f}\n")
-                f.write("\n\n")
-        with open(paths["fan"], "w") as f:
-            f.write("# fan wall outline: x[m] z[m] y[m]\n")
-            fz = geo["fan_z"]
-            for x, y in ((0, 0), (W, 0), (W, H), (0, H), (0, 0)):
-                f.write(f"{x:.4f} {fz:.4f} {y:.4f}\n")
-    labels = []
-    min_area = 0.01 * W * L
-    for name, b in boxes:
-        lbl = geo["labels"].get(name)
-        if lbl and (b[3] - b[0]) * (b[5] - b[2]) >= min_area:
-            labels.append((lbl, (b[0] + b[3]) / 2, (b[2] + b[5]) / 2,
-                           b[4] + 0.002))
-    return paths, labels
-
-
-def gnuplot_script(dat_path, out_path, px_w, px_h, title, dims, vmax,
-                   obj_paths=None, labels=(),
-                   view=(SIXEL_VIEW_EL0, SIXEL_VIEW_AZ0)):
-    """splot script in PHYSICAL coordinate space: the gnuplot axes are the
-    chassis dimensions in metres (x-axis = length z, y-axis = width x,
-    z-axis = HEIGHT y, floor pinned at 0) and the CFD field appears ONLY
-    as the colour of ONE interpolated pm3d plane at the mid-height slice
-    (|u| on the classic CFD blue->red rainbow, fixed 0..vmax so colours
-    do not flicker between frames; pressure rides along as column 5 for
-    later use). `equal xy` keeps the footprint true to physical scale
-    while the height axis - still labelled in real metres - takes the
-    visual stretch a 1U chassis needs to stay readable (strict
-    `equal xyz` collapses the scene into one unreadable sheet; same
-    clamp precedent as the ASCII view). Background lives in the
-    terminal spec - gnuplot 6 has no standalone `set background`."""
-    W, H, L = dims
-    title = title.replace("'", "")
-    head = (
-        f"set terminal sixelgd size {px_w},{px_h} background '#101014'\n"
-        f"set output '{out_path}'\n"
-        "set datafile missing 'nan'\n"
-        # classic CFD rainbow: deep blue (slow) -> red (fast)
-        "set palette defined (0 'blue', 1 'cyan', 2 'green', "
-        "3 'yellow', 4 'red')\n"
-        "set pm3d depthorder\n"       # sorts pm3d quads AND polygons
-        "set pm3d interpolate 3,3\n"  # smooth the slice plane
-        "set border lc rgb '#9696a0'\n"
-        "set tics textcolor rgb '#9696a0' font ',9'\n"
-        "set xlabel 'z - length [m]' textcolor rgb '#9696a0'\n"
-        "set ylabel 'x - width [m]' textcolor rgb '#9696a0'\n"
-        "set zlabel 'y - height [m]' textcolor rgb '#c8c8d0'\n"
-        "set cblabel '|u| [m/s]' textcolor rgb '#c8c8d0'\n"
-        f"set title '{title}' textcolor rgb 'white' font ',11'\n"
-        f"set xrange [{-OBJ_EPS:g}:{L + OBJ_EPS:g}] noextend\n"
-        f"set yrange [{-OBJ_EPS:g}:{W + OBJ_EPS:g}] noextend\n"
-        f"set zrange [{-OBJ_EPS:g}:{H + OBJ_EPS:g}] noextend\n"
-        f"set cbrange [0:{vmax:g}]\n"
-        "set view equal xy\n"
-        "set xyplane at 0\n"
-        f"set view {view[0]:g}, {view[1]:g}\n"   # WASD/arrows drive this
-        "set key off\n")
-    field = f"'{dat_path}' using 2:1:3:4 with pm3d notitle"
-    if not obj_paths:
-        return head + f"splot {field}\n"
-    # hardware scene: gray wireframe component boxes (see _box_edges for
-    # why filled polygons are BANNED here - sixelgd paints them as solid
-    # palette-coloured monoliths) + chassis wireframe + fan wall outline.
-    # The coloured plane stays visible straight through every block, the
-    # commercial-CFD "translucent hardware" look. NOTE also that a global
-    # `set style fill transparent` must never come back: its alpha bleeds
-    # into the pm3d plane and the colorbox, washing the whole palette out
-    # against the dark background (verified).
-    lab = "".join(
-        f"set label {i + 1} '{t.replace(chr(39), '')}' at "
-        f"{z:g},{x:g},{y:g} center textcolor rgb '#b8b8c0' font ',8' "
-        "front\n"
-        for i, (t, x, z, y) in enumerate(labels))
-    return (head
-            + lab
-            + f"splot '{obj_paths['objects']}' using 2:1:3 with lines "
-              "lc rgb '#808080' notitle, \\\n"
-            + f"      '{obj_paths['shell']}' using 2:1:3 with lines "
-              "lc rgb '#8a8a94' notitle, \\\n"
-            + f"      '{obj_paths['fan']}' using 2:1:3 with lines "
-              "lc rgb '#8f7a1e' notitle, \\\n"
-            + f"      {field}\n")
-
-
-def render_sixel_frame(workdir, vol_speed, vol_press, y_levels, geo, px,
-                       title, vmax, view=(SIXEL_VIEW_EL0, SIXEL_VIEW_AZ0),
-                       reuse_field=False):
-    """One frame: mid-height field plane + the run's hardware geometry ->
-    .dat/.gp -> `gnuplot` subprocess -> sixel string, with gnuplot's
-    leading cursor-home ESC[H STRIPPED (verified: sixelgd prefixes it,
-    which would yank every frame to the screen origin instead of our
-    pane). The object/shell/fan files are cached in workdir after the
-    first frame, and reuse_field=True additionally skips the field.dat
-    rewrite - a rotation-only re-render (same solver frame, new `view`
-    angles) then costs one gnuplot subprocess and nothing else. None on
-    any failure - the caller falls back."""
-    dims = geo["dims"]
-    dat = os.path.join(workdir, "field.dat")
-    gp = os.path.join(workdir, "frame.gp")
-    out = os.path.join(workdir, "frame.six")
-    if not (reuse_field and os.path.exists(dat)):
-        write_field_dat(dat, vol_speed, vol_press, y_levels, dims)
-    obj_paths, labels = write_object_dats(workdir, geo)
-    with open(gp, "w") as f:
-        f.write(gnuplot_script(dat, out, px[0], px[1], title, dims, vmax,
-                               obj_paths, labels, view))
-    try:
-        r = subprocess.run(["gnuplot", gp], capture_output=True,
-                           timeout=GNUPLOT_TIMEOUT,
-                           stdin=subprocess.DEVNULL)  # never the pty: any
-        if r.returncode != 0:                         # pager = frame hang
-            return None
-        with open(out, "rb") as f:
-            six = f.read()
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    start = six.find(b"\x1bP")               # DCS starts the real payload
-    if start < 0 or not six.rstrip().endswith(b"\x1b\\"):
-        return None
-    return six[start:].decode("latin-1")
-
-
-def _paint_at(console, row, col, renderable, width):
-    """Paint a rich renderable at an absolute screen position (used while
-    Live is suspended in sixel mode). Returns the painted line count."""
-    with console.capture() as cap:
-        console.print(renderable, width=width)
-    lines = cap.get().splitlines()
-    out = sys.stdout
-    for i, line in enumerate(lines):
-        out.write(f"\x1b[{row + i};{col}H{line}")
-    out.flush()
-    return len(lines)
 
 
 def _decode_keys(buf):
@@ -3444,116 +3109,6 @@ def _decode_keys(buf):
     return keys
 
 
-def _apply_view_key(scene, key):
-    """WASD / arrow / reset rotation state for the 3-D view. Returns True
-    only when the angles actually changed (holding W at the elevation
-    clamp must not trigger re-render churn). Elevation clamps to [0, 90]
-    - gnuplot allows 180 but under-floor views of a rack chassis are
-    noise; azimuth wraps mod 360."""
-    el, az = scene["view_el"], scene["view_az"]
-    if key in ("w", "up"):
-        el = min(90.0, el + SIXEL_VIEW_STEP)
-    elif key in ("s", "down"):
-        el = max(0.0, el - SIXEL_VIEW_STEP)
-    elif key in ("a", "left"):
-        az = (az - SIXEL_VIEW_STEP) % 360.0
-    elif key in ("d", "right"):
-        az = (az + SIXEL_VIEW_STEP) % 360.0
-    elif key == "r":
-        el, az = SIXEL_VIEW_EL0, SIXEL_VIEW_AZ0
-    else:
-        return False
-    if (el, az) == (scene["view_el"], scene["view_az"]):
-        return False
-    scene["view_el"], scene["view_az"] = el, az
-    return True
-
-
-def run_sixel_view(console, scene, poll_frame, done_evt, telem, cpu_hist,
-                   ram_hist, mem_total, cell_px, workdir, geo):
-    """The [v] high-fidelity mode. rich Live is suspended by the caller;
-    this loop owns the screen: a gnuplot sixel raster of the chassis
-    scene - wireframe hardware plus the interpolated mid-height field
-    plane, in physical chassis coordinates - in the main pane
-    (re-rendered when a new field frame arrives OR a WASD/arrow
-    keypress changes the view angle), FRONT/REAR minis
-    painted to the right, the CFD WORKERS strip at the bottom on its own
-    0.5 s cadence. Returns 'top' (user toggled back), 'done' (run over)
-    or 'failed' (a frame was rejected - caller disables sixel for the
-    session and the spec fallback is the 2-D top-down view)."""
-    out = sys.stdout
-    w, h = console.width, console.height
-    side_col = max(42, w - MINI_COLS - 4)
-    strip_row = max(SIXEL_TOP_ROW + 6, h - SYS_STRIP_ROWS + 1)
-    img_px = (max(280, (side_col - 3) * cell_px[0]),
-              max(180, (strip_row - SIXEL_TOP_ROW - 1) * cell_px[1]))
-    console.clear()
-    out.write("\x1b[?25l")                   # cursor off while we paint
-    seen = (-1, None, None)                  # (frame_no, el, az) rendered
-    sys_at = 0.0
-    status = "top"
-    try:
-        while True:
-            poll_frame()
-            if scene["view"] != "iso":
-                break
-            st = scene["status"]
-            el, az = scene["view_el"], scene["view_az"]
-            head = Text()
-            head.append(" ASCIISTREAM 3-D ", style="bold cyan")
-            head.append("physical space, mid-plane coloured by |u| | ",
-                        style="dim")
-            head.append(f"t={st['t']:.1f}/{st['t_total']:.0f}s "
-                        f"step {st['step']}/{st['steps']} | ", style="dim")
-            head.append(f"el {el:.0f} az {az:.0f}", style="bold")
-            head.append(" | ", style="dim")
-            head.append("WASD/arrows", style="bold")
-            head.append(" rotate  ", style="dim")
-            head.append("r", style="bold")
-            head.append(" reset  ", style="dim")
-            head.append("[v]", style="bold")
-            head.append(" 2-D view | Ctrl+C stops  ", style="dim")
-            _paint_at(console, 1, 1, head, w - 1)
-            want = (scene.get("frame_no", -1), el, az)
-            if scene.get("vol_speed") is not None and want != seen:
-                new_field = want[0] != seen[0]
-                seen = want
-                six = render_sixel_frame(
-                    workdir, scene["vol_speed"], scene["vol_press"],
-                    scene["vol_y"], geo, img_px,
-                    f"{scene['display_name']} - t={st['t']:.1f} s",
-                    max(scene.get("vref", 1.0), 1e-6), view=(el, az),
-                    reuse_field=not new_field)
-                if six is None:
-                    status = "failed"
-                    break
-                scene["six_final"] = six
-                out.write(f"\x1b[{SIXEL_TOP_ROW};1H")
-                out.write(six)
-                out.flush()
-                if scene["front_panel"] is not None:
-                    n = _paint_at(console, SIXEL_TOP_ROW, side_col,
-                                  scene["front_panel"], MINI_COLS + 2)
-                    _paint_at(console, SIXEL_TOP_ROW + n, side_col,
-                              scene["rear_panel"], MINI_COLS + 2)
-            now = time.monotonic()
-            if telem and now - sys_at >= 0.5:
-                sys_at = now
-                smp = telem.sample()
-                cpu_hist.append(smp["cpu_pool"])
-                ram_hist.append(smp["uss"])
-                _paint_at(console, strip_row, 1, build_sys_panel(
-                    smp, cpu_hist, ram_hist, mem_total, w - 1), w - 1)
-            if done_evt.is_set():
-                status = "done"
-                break
-            time.sleep(0.1)      # snappy rotation pickup; renders are the
-                                 # real cost and only run on state change
-    finally:
-        out.write("\x1b[?25h")               # cursor back on, always
-        out.flush()
-    return status
-
 
 def build_legend():
     t = Text()
@@ -3572,7 +3127,9 @@ def build_legend():
     t.append("| 2-D mid-plane streaklines | live transient field | ",
              style="dim")
     t.append("[v]", style="bold")
-    t.append(" 3-D view | Ctrl+C stops", style="dim")
+    t.append(" 3-D iso view ", style="dim")
+    t.append("[p]", style="bold")
+    t.append(" pop-out 3-D (host viewer) | Ctrl+C stops", style="dim")
     return t
 
 
@@ -4167,11 +3724,11 @@ def launcher_main(config_path):
     if params["fan_custom"]:
         cmd += ["--fan-cfm", str(params["fan_custom"]["max_cfm"]),
                 "--fan-mmh2o", str(params["fan_custom"]["max_mmh2o"])]
-    # stdin=DEVNULL is load-bearing three ways: PRRTE's stdin forwarder
-    # otherwise reads the launcher's pty and (1) races the [v] key watcher
-    # for keystrokes, (2) eats the DA1/cell-size query replies during
-    # sixel detection, (3) can trip tty job-control stops under synthetic
-    # ptys. The workers never read stdin - argv + callback socket only.
+    # stdin=DEVNULL is load-bearing two ways: PRRTE's stdin forwarder
+    # otherwise reads the launcher's pty and (1) races the [v]/[p] key
+    # watcher for keystrokes, (2) can trip tty job-control stops under
+    # synthetic ptys. The workers never read stdin - argv + callback
+    # socket only.
     proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True)
@@ -4224,27 +3781,12 @@ def launcher_main(config_path):
                    "steps": 1, "q_out": 0.0},
         "front_panel": None, "rear_panel": None,
         "iso_panel": None, "view": "top",
-        "view_el": SIXEL_VIEW_EL0, "view_az": SIXEL_VIEW_AZ0,
     }
 
     def ingest(header, arrays):
         vref = max(header["fan_vz"], 1e-6)
         scene["particles"].update_fields(arrays["ux"], arrays["uz"],
                                          arrays["speed"], vref)
-        # raw fields + a frame counter for the sixel pipeline (it re-runs
-        # gnuplot only when a genuinely new frame arrived). The volumetric
-        # stack ships alongside the classic mid-plane arrays; a single-
-        # slice fallback keeps the view alive against a worker that only
-        # streamed the mid-plane.
-        scene["press"] = arrays.get("press")
-        scene["speed_arr"] = arrays["speed"]
-        scene["vol_speed"] = arrays.get("vol_speed",
-                                        arrays["speed"][np.newaxis])
-        scene["vol_press"] = arrays.get("vol_press",
-                                        arrays["press"][np.newaxis])
-        scene["vol_y"] = header.get("vol_y", [geo["dims"][1] / 2.0])
-        scene["vref"] = vref
-        scene["frame_no"] = scene.get("frame_no", 0) + 1
         scene["status"] = {"t": header["t"], "t_total": params["sim_time"],
                            "step": header["step"], "steps": header["steps"],
                            "q_out": header["q_out"],
@@ -4268,14 +3810,12 @@ def launcher_main(config_path):
                 return True
         return False
 
-    # [v] toggles the main pane between top-down and 3-D view: single-char
-    # reads off a cbreak'd stdin in a daemon thread. The original termios
-    # state is restored (and the thread joined) before any post-run prompt.
+    # [v] toggles the main pane between top-down and the ASCII iso view,
+    # [p] signals the host viewer sidecar: single-char reads off a
+    # cbreak'd stdin in a daemon thread. The original termios state is
+    # restored (and the thread joined) before any post-run prompt.
     keys_stop = threading.Event()
     key_thr = None
-    sixel_ok, sixel_why = False, "not a terminal"
-    cell_px = CELL_PX_FALLBACK
-    sixel_dir = None
 
     def key_watcher():
         try:
@@ -4309,8 +3849,11 @@ def launcher_main(config_path):
                     if k in ("v", "2", "3"):
                         scene["view"] = ("iso" if scene["view"] == "top"
                                          else "top")
-                    else:
-                        _apply_view_key(scene, k)
+                    elif k == "p":
+                        # non-blocking: one tiny file write; the message
+                        # is printed by the main loop so rich Console
+                        # calls stay off this thread
+                        scene["viewer_note"] = request_host_viewer()
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
@@ -4330,18 +3873,6 @@ def launcher_main(config_path):
                 console.print(scene["front_panel"])
                 console.print(scene["rear_panel"])
         else:
-            # sixel capability first - the DA1/cell-size queries read raw
-            # replies off stdin, so they MUST precede the key watcher
-            sixel_ok, sixel_why = detect_sixel(console)
-            if sixel_ok and not ensure_gnuplot(console):
-                sixel_ok, sixel_why = False, "gnuplot with sixelgd " \
-                                             "unavailable"
-            if sixel_ok:
-                cell_px = detect_cell_px()
-                sixel_dir = tempfile.mkdtemp(prefix="asciistream_six_")
-            else:
-                console.print(f" [dim]3-D view: sixel off ({sixel_why}) - "
-                              "[v] falls back to the 2-D top-down view[/]")
             if sys.stdin.isatty():
                 key_thr = threading.Thread(target=key_watcher, daemon=True)
                 key_thr.start()
@@ -4367,46 +3898,25 @@ def launcher_main(config_path):
                 None, cpu_hist, ram_hist, mem_total, console.width))
             sys_at = 0.0
             with Live(layout, console=console, refresh_per_second=ANIM_FPS,
-                      screen=False) as live:
+                      screen=False):
                 while not state["done"].is_set() or poll_frame():
                     got = poll_frame()
+                    note = scene.pop("viewer_note", None)
+                    if note:            # [p] feedback (set by key_watcher;
+                        console.print(note)   # Live lifts prints above it)
                     if scene["front_panel"] is not None:
                         scene["particles"].step()
-                        if scene["view"] == "iso":
-                            if sixel_ok:
-                                # a raster image and a diff-repainting Live
-                                # cannot share the screen - suspend Live for
-                                # the sixel mode, resume when it returns
-                                live.stop()
-                                try:
-                                    res = run_sixel_view(
-                                        console, scene, poll_frame,
-                                        state["done"], telem, cpu_hist,
-                                        ram_hist, mem_total, cell_px,
-                                        sixel_dir, geo)
-                                finally:
-                                    console.clear()
-                                    live.start(refresh=True)
-                                if res == "failed":
-                                    sixel_ok = False
-                                    console.print(
-                                        " [yellow]sixel frame rejected - "
-                                        "falling back to the 2-D top-down "
-                                        "view for this run[/]")
-                                if res == "done":
-                                    break
-                                scene["view"] = "top"
-                            else:
-                                scene["view"] = "top"   # spec fallback: 2-D
-                                if not scene.get("six_note"):
-                                    scene["six_note"] = True
-                                    console.print(
-                                        f" [yellow]3-D view needs sixel - "
-                                        f"{sixel_why}; staying on the 2-D "
-                                        f"top-down view ({SIXEL_ENV}=1 "
-                                        "forces it on)[/]")
+                        # [v]/2/3 toggle: the main pane is either the 2-D
+                        # top-down particle field or the ASCII isometric
+                        # chassis view (always available - it is the same
+                        # renderer the report embeds; the raster-grade 3-D
+                        # window lives in the host viewer sidecar, [p])
+                        main_view = (scene["iso_panel"]
+                                     if scene["view"] == "iso"
+                                     and scene["iso_panel"] is not None
+                                     else build_main_panel(scene))
                         layout["main"].update(
-                            Group(build_main_panel(scene), build_legend()))
+                            Group(main_view, build_legend()))
                         if got:
                             layout["front"].update(scene["front_panel"])
                             layout["rear"].update(scene["rear_panel"])
@@ -4427,19 +3937,13 @@ def launcher_main(config_path):
         keys_stop.set()
         if key_thr is not None:
             key_thr.join(timeout=1.0)
-        if sixel_dir:                 # scratch .dat/.gp/.six files; the
-            shutil.rmtree(sixel_dir,  # final frame lives in scene memory
-                          ignore_errors=True)
 
     proc.wait(timeout=60)
     if state["summary"]:
         summary = state["summary"]
         fan_cfg = params["fan_custom"] or cfg["fans"][params["fan"]]
         console.print()
-        if scene.get("six_final"):  # final high-fidelity frame (sixel) -
-            sys.stdout.write(scene["six_final"] + "\n")   # keepsake in the
-            sys.stdout.flush()                            # scrollback
-        elif scene["iso_panel"]:    # final 3-D chassis view (ASCII)
+        if scene["iso_panel"]:      # final 3-D chassis view (ASCII)
             console.print(scene["iso_panel"])
         console.print(requirements_table(server_cfg["requirements"], summary,
                                          server_cfg["heat_load"]))

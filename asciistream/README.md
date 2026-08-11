@@ -23,19 +23,21 @@ Docker.
   WORKERS** strip — braille history graphs and meters (psutil) scoped to
   the solver's own processes only: summed USS memory and CPU normalised
   to their affinity pool, never global system telemetry.
-- **High-fidelity 3-D scene (sixel + gnuplot)** — press `v` (or `2`/`3`) on
-  a sixel-capable terminal and the main pane becomes a true raster `splot`
-  of the chassis in physical metres: the component boxes, shell and gold
-  fan wall in wireframe around one smooth interpolated mid-height flow
-  plane coloured by air speed on the classic CFD rainbow — rotatable live
-  with WASD/arrow keys — re-rendered through gnuplot's `sixelgd` terminal
-  as the solve streams; without sixel support `v` stays on the 2-D
-  top-down view and says why.
+- **Pop-out 3-D viewer (PyVista/Qt)** — press `p` in the dashboard and a
+  native, mouse-rotatable PyVista window opens **on the host**, next to
+  the container: the chassis hardware drawn from the solver's per-cell
+  zone tags, the flow coloured by air speed on the classic CFD rainbow,
+  live-refreshed as the solve streams and switched to the final full
+  export when the run completes. Provisioned once with
+  `./setup_host_viewer.sh`; entirely optional — without it `p` prints a
+  one-line reason and everything else works as before.
 - **ASCII 3-D chassis view** — the CAD-style isometric projection of the
   physical chassis (component boxes extruded in ASCII, top faces coloured
-  by local air speed, the fan wall and PSU fans picked out in gold) is
-  printed after every run and embedded in the text report — raster images
-  cannot live in a `.txt` file.
+  by local air speed, the fan wall and PSU fans picked out in gold):
+  press `v` (or `2`/`3`) to swap it into the main pane during the run; it
+  is printed after every run and embedded in the text report — raster
+  images cannot live in a `.txt` file — and it is the 3-D view for
+  remote/SSH-only sessions, where no host window can open.
 - **10 hardware profiles + custom** — rack servers, a 4×GPU node, two
   32×QSFP switches, a 6RU aggregation router and an ATX mid-tower, all
   generated parametrically from `server_configs.json` (no hardcoded
@@ -58,8 +60,9 @@ Docker.
 - **IT telemetry** — post-run airflow checks per component (CPU / GPU /
   optics) with `[THERMAL WARNING]` banners, a fan acoustics/power table, and
   an exportable plain-text run report.
-- **Real output files** — `velocity` / `pressure` / `zones` VTU series you
-  can open in ParaView.
+- **Real output files** — a final `velocity` / `pressure` / `zones` VTU
+  snapshot you can open in ParaView (plus periodic `viz_step_*` exports
+  while the host viewer is attached — see Outputs).
 
 ## Requirements
 
@@ -67,7 +70,8 @@ Docker.
 |---|---|
 | OS | Linux or macOS with **Podman** (preferred) or **Docker** |
 | CPU | x86-64 **and** ARM64 (Apple M-series, Graviton) — the image publishes both `linux/amd64` and `linux/arm64`, so pulls run natively on either |
-| Terminal | 100+ columns recommended; 24-bit colour (any modern emulator); a **sixel-capable** emulator (Konsole, foot, WezTerm, `xterm -ti vt340`, …) unlocks the gnuplot 3-D view — autodetected, `ASCIISTREAM_SIXEL=1/0` overrides |
+| Terminal | 100+ columns recommended; 24-bit colour (any modern emulator) |
+| 3-D viewer (optional) | a desktop session on the machine running `./run.sh` plus Homebrew CPython 3.12 for `./setup_host_viewer.sh` — remote/SSH-only runs skip it and keep the ASCII isometric view |
 | Disk | ~2 GB for the container image, a few MB per run for VTU output |
 | RAM | depends on mesh preset — see table below |
 
@@ -76,10 +80,10 @@ against **dolfinx 0.11.0** (the `dolfinx/dolfinx:stable` tag as of
 Aug 2026 — note `:stable` is a moving tag), which also provides gmsh,
 Open MPI, PETSc and numpy. The launcher pip-installs `rich` and `psutil`
 into the container on first start; `psutil` is optional (without it the
-dashboard just drops the CFD WORKERS telemetry strip). On sixel-capable
-terminals it also apt-installs `gnuplot-nox` inside the container for the
-3-D splot (first use per container, ~30 s, overlapping the mesh build;
-skipped entirely otherwise).
+dashboard just drops the CFD WORKERS telemetry strip). The pop-out 3-D
+viewer is the one component that lives on the **host** instead — a GUI
+cannot cross the container boundary — in its own `.venv-viewer/`
+(`./setup_host_viewer.sh`, once).
 
 Mesh presets (RAM guidance as shown in the wizard):
 
@@ -130,10 +134,12 @@ directory at `/work` and starts the wizard, which asks for:
    machine halts hard (table note above)
 
 Then the launcher spawns the MPI worker pool and the live dashboard runs
-until the simulated time is reached (`Ctrl+C` stops both). After the run:
-telemetry tables, thermal warnings, the final 3-D view (a sixel frame
-when the pipeline is active, the ASCII chassis view otherwise), and an
-optional timestamped report (`cfd_report_<profile>_<timestamp>.txt`).
+until the simulated time is reached (`Ctrl+C` stops both). During the run
+`v` (or `2`/`3`) toggles the main pane to the ASCII isometric chassis
+view and `p` pops out the interactive PyVista window (host viewer
+provisioned). After the run: telemetry tables, thermal warnings, the
+final ASCII 3-D chassis view, and an optional timestamped report
+(`cfd_report_<profile>_<timestamp>.txt`).
 
 ## MPI notes
 
@@ -148,47 +154,45 @@ optional timestamped report (`cfd_report_<profile>_<timestamp>.txt`).
 - Rank 0 builds the gmsh mesh, the mesh is distributed, all ranks solve; if
   the dashboard socket dies the solve continues and still writes the VTUs.
 
-## The sixel 3-D view
+## The pop-out 3-D viewer (PyVista)
 
-`[v]` upgrades the main pane to real raster graphics when the terminal
-allows it:
+Everything ASCIISTREAM computes runs inside the dolfinx container — but a
+GUI cannot cross the container boundary, so the interactive 3-D window is
+a **host-side sidecar** (`viewer_sidecar.py`) that talks to the
+containerized TUI through files in the shared work directory:
 
-1. the launcher queries the terminal (DA1) for sixel support — Konsole,
-   foot, WezTerm, mlterm and `xterm -ti vt340` all advertise it; tmux and
-   GNU screen swallow the query unless passthrough is enabled and land in
-   the clean fallback
-2. `gnuplot-nox` is apt-installed inside the container on first use (~30 s
-   per fresh container, overlapping the mesh build and JIT wait)
-3. the scene is the physical chassis: gnuplot's axes are the chassis
-   dimensions in metres (`set view equal xy`, footprint true to scale),
-   and every component box — drive cage, CPUs, DIMM banks, PCIe cards,
-   PSUs, custom zones — is drawn as gray wireframe edges inside the
-   shell outline, the fan wall picked out in gold and labels on the
-   larger components; it is built from the same geometry source as the
-   ASCII isometric view, so the two renderers cannot disagree about
-   what hardware exists
-4. every new solver frame re-plots the mid-height slice of the field as
-   one smooth interpolated pm3d plane, coloured by local air speed on
-   the classic blue→cyan→green→yellow→red CFD palette (solid components
-   carve real holes in the plane), sized to the pane via the terminal's
-   reported cell pixels
-5. the view rotates live: `w`/`s` (or ↑/↓) step elevation ±10° within
-   0–90°, `a`/`d` (or ←/→) step azimuth around the full circle and `r`
-   resets to the default 55°/205°; the header shows the live `el`/`az`
-   readout plus the key help, and a rotation re-render reuses every
-   cached geometry file — only gnuplot re-runs
-6. the rich dashboard is suspended while the image pane is up (a raster
-   image and a diff-repainting TUI cannot share the screen) — the
-   FRONT/REAR minis and the CFD WORKERS strip keep painting around it,
-   and `[v]` drops back to the particle view
+1. provision the host venv once: `./setup_host_viewer.sh` (Homebrew
+   CPython 3.12; installs vtk/pyvista/pyvistaqt/PyQt5 into
+   `.venv-viewer/`)
+2. `./run.sh` then starts the sidecar automatically next to the
+   container (log: `${TMPDIR:-/tmp}/asciistream-viewer.log`). It stays
+   **dormant** — no window, near-zero cost — and drops a
+   `.asciistream_viewer_ready` marker in the work dir, which tells the
+   launcher to enable the solver's periodic mid-run field export
+3. press **`p`** in the live dashboard: the TUI writes a trigger file,
+   the sidecar answers by opening a native PyVista/Qt window — chassis
+   hardware built from the solver's per-cell `zone` tags, flow coloured
+   by `|u|` on the classic blue→cyan→green→yellow→red CFD palette —
+   rotatable/zoomable with the usual PyVista mouse controls
+4. while the solve runs the window refreshes itself from
+   `viz_manifest.json`, the atomically-replaced manifest naming each
+   export's datasets (`viz_step_NNNNNN/` directories; only the two
+   newest are kept); when the run completes it switches to the final
+   full-resolution export
+5. closing the window returns the sidecar to dormant — `p` re-opens it;
+   the sidecar exits with `run.sh` (including `Ctrl+C`)
+6. optionally, drop a `.glb`/`.gltf` hardware-boundary model (Draco
+   compression supported) into the work directory and the viewer
+   overlays it on the chassis
 
-`ASCIISTREAM_SIXEL=1` forces the pipeline on (for terminals that render
-sixel without advertising it), `ASCIISTREAM_SIXEL=0` disables it. Without
-sixel `[v]` prints a one-line reason and stays on the 2-D view; the ASCII
-chassis view still prints post-run and in the report either way.
-
-Example Image of the 3D Sixel rendering
-<img width="1256" height="1301" alt="Screenshot_20260810_193904" src="https://github.com/user-attachments/assets/4721950a-6604-4367-8eb9-cbc97a9ef360" />
+The viewer never runs inside the container and structurally cannot slow
+the MPI solve — separate process, separate interpreter, separate OS
+namespace; the solver's only extra cost is the periodic export, which is
+enabled solely while a sidecar is attached. `ASCIISTREAM_VIEWER=0
+./run.sh` opts out entirely. Without the sidecar (no venv, opt-out, or a
+remote/SSH-only session with no desktop) `p` prints a one-line reason
+and `v` still gives the ASCII isometric 3-D view, which also prints
+post-run and embeds in the text report.
 
 ## Scripted / headless runs
 
@@ -290,9 +294,22 @@ Per-profile `requirements`
 
 ## Outputs
 
-- `velocity.vtu` / `pressure.vtu` / `zones.vtu` time series (plus
-  `*_pN_*.vtu` / `.pvtu` piece files from the MPI ranks) — open the `.pvtu`
-  or `.vtu` in ParaView.
+- One **final snapshot** of `velocity` / `pressure` / `zones` (not a time
+  series): numbered `.pvtu` piece sets from the MPI ranks plus
+  rank-piece `.vtu` files. Note the bare `velocity.vtu` /
+  `pressure.vtu` / `zones.vtu` are PVD-style collection *indexes* — they
+  open in ParaView but carry no data themselves; load the `.pvtu` (or
+  follow `viz_manifest.json`, which names the exact data-carrying file
+  per field).
+- While the host viewer sidecar is attached: periodic mid-run
+  `viz_step_NNNNNN/` exports plus the atomically-updated
+  `viz_manifest.json` (only the two newest step directories are kept;
+  `"done": true` marks the final export). These feed the pop-out viewer
+  and the two helper scripts below.
+- `visualize.py` — headless PNG snapshot of the newest export
+  (`.venv-viewer/bin/python visualize.py`); `convert.py` — merges the
+  rank pieces into single `*_clean.vtu` files, one per field. Both are
+  manifest-driven and run under the host viewer venv.
 - `cfd_report_<profile>_<timestamp>.txt` — profile, fan, the hardware
   answers used for the run, telemetry, warnings, and ANSI-free copies of
   the dashboard cross-section and the 3-D chassis view.
@@ -326,17 +343,17 @@ tool at engineering accuracy — not a validated thermal-certification tool.
   24-bit-capable terminal for the CFD colormap.
 - **Garbled layout** — widen the terminal; 100+ columns recommended.
 - **First start is slow** — one-off `pip install rich psutil` inside the
-  container (plus `apt-get install gnuplot-nox`, ~30 s, on sixel
-  terminals), then mesh + JIT compilation before the first frame (the
+  container, then mesh + JIT compilation before the first frame (the
   launcher waits up to 7 minutes before giving up).
 - **`fine`/`ultra` presets** — mind the RAM table; the MemTotal guard asks
   before letting `fine` overcommit, while `ultra` under 32 GB halts with
   `MemoryError` by design.
-- **`3-D view: sixel off (...)`** — the terminal did not advertise sixel
-  in its DA1 reply, or gnuplot could not be installed. Konsole, foot,
-  WezTerm and `xterm -ti vt340` advertise it; tmux/screen need
-  passthrough enabled. `ASCIISTREAM_SIXEL=1 ./run.sh` forces the
-  pipeline on regardless.
+- **`p` says the host viewer is not attached** — run
+  `./setup_host_viewer.sh` once on the host, then restart `./run.sh`
+  (the sidecar starts with it). On remote/SSH-only sessions there is no
+  desktop for the window — use `v` for the ASCII isometric 3-D view.
+  The sidecar's log is at `${TMPDIR:-/tmp}/asciistream-viewer.log`;
+  `ASCIISTREAM_VIEWER=0 ./run.sh` disables the sidecar entirely.
 - **SELinux (Fedora/RHEL)** — the mount uses `:z` relabelling; if you run
   the container manually, keep that flag.
 - **macOS: "VM is not running"** — start the engine's VM first:
