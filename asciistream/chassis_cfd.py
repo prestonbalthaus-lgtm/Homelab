@@ -172,7 +172,24 @@
    Turbulence: constant effective eddy viscosity NU_EFFECTIVE (~0.01*U*D_h,
    block-level electronics-cooling practice) - bulk paths and pressure drops
    at engineering accuracy, not resolved turbulence. Outlet temperature is
-   the bulk balance T_in + heat_load/(rho*Q*cp) over the computed flow.
+   the bulk balance T_in + heat_load/(rho*Q*cp) over the computed flow -
+   unless the ENERGY EQUATION is on (worker args key "thermal", CLI
+   --thermal on; default off = byte-identical legacy behaviour): then a
+   4th linear solve per step advects-diffuses temperature T [degC], same
+   backward-Euler/semi-implicit treatment (advecting velocity lagged to
+   u_n; eddy diffusivity NU_EFFECTIVE/PRANDTL_TURB; P1 space, GMRES +
+   block-Jacobi ILU - advection makes it nonsymmetric). heat_load [W]
+   becomes volumetric sources via thermal_heat_plan: porous zones with an
+   explicit config heat_w first, wizard GPUs (SOLID PCIe cards - cut out
+   of the fluid, no interior cells) into the 1 cm washing shell of fluid
+   around each card, the remainder over CPU sinks + cpu/gpu-telemetry
+   zones (whole fluid domain if none exist). Inlet air enters at
+   requirements.inlet_temp_c, walls are adiabatic, and the split fan
+   plane carries bulk enthalpy across as a MIXING PLANE (downstream copy
+   held at the upstream mean each step). The summary then ADDS
+   t_exhaust_c (solved mass-flow-weighted outlet mean) next to
+   t_exhaust_bulk_c (the bulk estimate) for comparison, frames ADD
+   t_out_c, and the VTU/viz exports gain the "temperature" field.
 
  DASHBOARD (launcher side, rich.layout + rich.live)
    Live ASCII particle animation over the streamed field: glyphs by local
@@ -278,6 +295,16 @@ NU_AIR  = 1.5e-5     # molecular kinematic viscosity of air          [m^2/s]
 RHO_AIR = 1.196      # air density                                   [kg/m^3]
 CP_AIR  = 1006.0     # specific heat of air (const. pressure)        [J/(kg K)]
 NU_EFFECTIVE = 3.4e-3          # constant eddy viscosity for the stress term
+PRANDTL_TURB = 0.9   # turbulent Prandtl number: the energy equation uses the
+                     # eddy heat diffusivity NU_EFFECTIVE / PRANDTL_TURB
+                     # (Reynolds analogy - same block-level practice as the
+                     # constant eddy viscosity; molecular diffusion is two
+                     # orders down and folded into it)
+GPU_SHELL_M = 0.01   # SOLID PCIe cards are cut OUT of the fluid domain, so
+                     # their wattage cannot live inside them: it is released
+                     # into this thick "washing shell" of fluid around each
+                     # card - the same 1 cm shell the GPU airflow telemetry
+                     # proxy samples (worker args key "thermal")
 
 # --- Transient scheme ---------------------------------------------------------
 SIM_DT      = 0.1    # default time step [s]; tunable in the TUI / --dt
@@ -319,6 +346,8 @@ MESH_EST_KB_CELL = 5.0   # rough solver RAM per tet [KB], used for the soft
 OUT_VELOCITY = "velocity.vtu"
 OUT_PRESSURE = "pressure.vtu"
 OUT_ZONES    = "zones.vtu"
+OUT_TEMPERATURE = "temperature.vtu"   # written only when the energy
+                                      # equation ran (args key "thermal")
 
 # --- Periodic mid-run viz export (worker args key "viz_every", 0 = off) -------
 # Every export lands in its OWN viz_step_NNNNNN/ directory and the manifest
@@ -663,19 +692,27 @@ DEFAULT_CONFIG = {
             "pcie_risers": [{"name": "riser_left", "x": [0.176, 0.182]},
                             {"name": "riser_right", "x": [0.252, 0.258]}],
             "heat_load": 1500.0, "baseline_zeta": 25.0,
+            # heat_w: 300 W TDP per passive GPU (K80/M60 class) - pinned
+            # explicitly so the energy equation localises 1200 of the
+            # 1500 W heat_load in the GPU bays; the CPU sinks share the
+            # remainder
             "custom_zones": [
                 {"name": "gpu_1", "label": "GPU 1", "type": "porous",
                  "box": [0.010, 0.006, 0.56, 0.090, 0.037, 0.83],
-                 "zeta": 170.0, "permeability": 1.5e-7, "telemetry": "gpu"},
+                 "zeta": 170.0, "permeability": 1.5e-7, "telemetry": "gpu",
+                 "heat_w": 300.0},
                 {"name": "gpu_2", "label": "GPU 2", "type": "porous",
                  "box": [0.096, 0.006, 0.56, 0.176, 0.037, 0.83],
-                 "zeta": 170.0, "permeability": 1.5e-7, "telemetry": "gpu"},
+                 "zeta": 170.0, "permeability": 1.5e-7, "telemetry": "gpu",
+                 "heat_w": 300.0},
                 {"name": "gpu_3", "label": "GPU 3", "type": "porous",
                  "box": [0.258, 0.006, 0.56, 0.338, 0.037, 0.83],
-                 "zeta": 170.0, "permeability": 1.5e-7, "telemetry": "gpu"},
+                 "zeta": 170.0, "permeability": 1.5e-7, "telemetry": "gpu",
+                 "heat_w": 300.0},
                 {"name": "gpu_4", "label": "GPU 4", "type": "porous",
                  "box": [0.344, 0.006, 0.56, 0.424, 0.037, 0.83],
-                 "zeta": 170.0, "permeability": 1.5e-7, "telemetry": "gpu"},
+                 "zeta": 170.0, "permeability": 1.5e-7, "telemetry": "gpu",
+                 "heat_w": 300.0},
                 {"name": "psu_bank", "label": "PSU 1+1", "type": "solid",
                  "box": [0.182, 0.006, 0.60, 0.252, 0.037, 0.876],
                  "fan_rpm": 15000, "fan_size_mm": 40},
@@ -707,12 +744,14 @@ DEFAULT_CONFIG = {
             "pcie_risers": [],       # switch: no riser hardware exists
             "heat_load": 350.0, "baseline_zeta": 20.0,
             "optics_zone_z": [0.005, 0.05],
+            # optics heat_w: 32 QSFP100 modules x ~3.5 W (engineering
+            # estimate) - the ASIC sink takes the rest of the heat_load
             "custom_zones": [
                 {"name": "optics_cage", "label": "QSFP CAGE",
                  "type": "porous",
                  "box": [0.0, 0.0, 0.005, 0.439, 0.0445, 0.05],
                  "zeta": 55.0, "permeability": 5e-7,
-                 "telemetry": "optics"},
+                 "telemetry": "optics", "heat_w": 115.0},
                 {"name": "psu_1", "label": "PSU 1", "type": "solid",
                  "box": [0.006, 0.004, 0.365, 0.081, 0.0405, 0.400],
                  "fan_rpm": 15000, "fan_size_mm": 40},
@@ -747,12 +786,14 @@ DEFAULT_CONFIG = {
             "pcie_risers": [],       # switch: no riser hardware exists
             "heat_load": 400.0, "baseline_zeta": 20.0,
             "optics_zone_z": [0.005, 0.05],
+            # optics heat_w: 32 QSFP28 modules x ~3.5 W (engineering
+            # estimate) - the ASIC sink takes the rest of the heat_load
             "custom_zones": [
                 {"name": "optics_cage", "label": "QSFP CAGE",
                  "type": "porous",
                  "box": [0.0, 0.0, 0.005, 0.427, 0.0432, 0.05],
                  "zeta": 55.0, "permeability": 5e-7,
-                 "telemetry": "optics"},
+                 "telemetry": "optics", "heat_w": 115.0},
                 {"name": "psu_1", "label": "PSU 1", "type": "solid",
                  "box": [0.005, 0.004, 0.59, 0.080, 0.039, 0.675],
                  "fan_rpm": 15000, "fan_size_mm": 40},
@@ -794,14 +835,17 @@ DEFAULT_CONFIG = {
                  "type": "solid",
                  "box": [0.02, 0.005, 0.050, 0.417, 0.070, 0.095],
                  "fan_rpm": 15000, "fan_size_mm": 40},
+                # heat_w: the router has no CPU sinks or telemetry zones,
+                # so the 1800 W heat_load is pinned where it is made -
+                # the line-card and RP/ESP bays (engineering split)
                 {"name": "linecard_bay", "label": "LINE CARDS",
                  "type": "porous",
                  "box": [0.02, 0.090, 0.13, 0.4174, 0.170, 0.40],
-                 "zeta": 110.0, "permeability": 3e-7},
+                 "zeta": 110.0, "permeability": 3e-7, "heat_w": 1250.0},
                 {"name": "rp_esp_bay", "label": "RP / ESP",
                  "type": "porous",
                  "box": [0.02, 0.180, 0.13, 0.4174, 0.255, 0.40],
-                 "zeta": 90.0, "permeability": 3e-7},
+                 "zeta": 90.0, "permeability": 3e-7, "heat_w": 550.0},
             ],
             "mesh_settings": {"coarse": {"element_size_mm": 21.0},
                               "medium": {"element_size_mm": 12.5},
@@ -843,9 +887,12 @@ DEFAULT_CONFIG = {
                  "type": "porous",
                  "box": [0.30, 0.01, 0.06, 0.43, 0.19, 0.17],
                  "zeta": 70.0, "permeability": 4e-7},
+                # heat_w: ~250 W desktop GPU board power (engineering
+                # estimate); the CPU tower takes the rest of the 450 W
                 {"name": "gpu_card", "label": "GPU", "type": "porous",
                  "box": [0.262, 0.08, 0.18, 0.300, 0.196, 0.41],
-                 "zeta": 55.0, "permeability": 5e-7, "telemetry": "gpu"},
+                 "zeta": 55.0, "permeability": 5e-7, "telemetry": "gpu",
+                 "heat_w": 250.0},
                 {"name": "psu_shroud", "label": "PSU", "type": "solid",
                  "box": [0.375, 0.005, 0.28, 0.435, 0.195, 0.455],
                  "fan_rpm": 2000, "fan_size_mm": 120},
@@ -985,8 +1032,13 @@ def apply_hw_overrides(s, hw):
         s["populated_pcie_slots"] = min(n_gpu + (1 if hw.get("nic") else 0), 8)
         s["nic_slot"] = bool(hw.get("nic"))
         if n_gpu > 0:
-            s["heat_load"] = (float(s["heat_load"])
-                              + n_gpu * float(hw.get("gpu_watts") or 0.0))
+            gpu_w = n_gpu * float(hw.get("gpu_watts") or 0.0)
+            s["heat_load"] = float(s["heat_load"]) + gpu_w
+            # remembered SEPARATELY from the folded total: the energy
+            # equation maps exactly this share onto the meshed cards'
+            # washing shells (thermal_heat_plan) - the cards are solids
+            # with no interior cells to source into
+            s["gpu_heat_w"] = gpu_w
     return s
 
 
@@ -1067,7 +1119,12 @@ def build_geometry(server_cfg):
         "optics") hook a zone into the thermal threshold checks; optional
         "fan_rpm" + "fan_size_mm" mark the zone as carrying its own fan
         (PSUs) - drawn as the gold fan marker, not solved as a momentum
-        source.
+        source. Optional "heat_w" (POROUS zones only, >= 0) pins that many
+        watts of the profile heat_load onto the zone as a volumetric
+        source when the energy equation runs (thermal_heat_plan); a solid
+        zone cannot carry it - solids are cut out of the fluid domain, so
+        there are no cells to source into (declare the zone porous, or
+        model it as a PCIe card and use the washing-shell path).
       - optics_zone_z [z0,z1]: moves the optics telemetry slab from the
         default rear-I/O position (switches: the front cage).
     """
@@ -1192,6 +1249,10 @@ def build_geometry(server_cfg):
         kind = zone.get("type", "solid")
         labels[name] = zone.get("label", _block_label(name))
         telem = zone.get("telemetry")
+        heat_w = zone.get("heat_w")
+        if heat_w is not None and not (float(heat_w) >= 0.0):
+            raise ValueError(f"custom zone '{name}': heat_w must be a "
+                             "wattage >= 0")
         if zone.get("fan_rpm"):
             fan_marks.append({"name": name, "box": b,
                               "rpm": int(zone["fan_rpm"]),
@@ -1205,8 +1266,15 @@ def build_geometry(server_cfg):
                 "C2": float(zone["zeta"]) / max(b[5] - b[2], 1e-9),
                 "K": float(zone["permeability"]),
                 "tag": VOL_EXTRA0 + len(extra_porous),
-                "telemetry": telem})
+                "telemetry": telem,
+                "heat_w": float(heat_w) if heat_w is not None else None})
         elif kind == "solid":
+            if heat_w is not None:
+                raise ValueError(
+                    f"custom zone '{name}': heat_w is only supported on "
+                    "porous zones - a solid is CUT OUT of the fluid "
+                    "domain, so a volumetric source inside it would land "
+                    "in a region with no cells")
             solids.append((name, b))
             if telem:
                 solid_telem[name] = telem
@@ -1346,6 +1414,88 @@ def fan_operating_point(server_cfg, fan_cfg, geo, duty=1.0):
         "watts": watts * duty ** 3 if watts else None,
         "dba": dba + 50.0 * float(np.log10(duty)) if dba else None,
     }
+
+
+def thermal_enabled(args):
+    """Parse the worker args key "thermal" (CLI --thermal): the gate of the
+    energy equation. OFF by default - a run without it is byte-identical
+    to the pre-thermal solver. Accepts on/1/true/yes and off/0/false/no
+    (missing/empty = off); anything else is a loud SystemExit like the
+    other worker flags. Pure stdlib - host-testable."""
+    val = args.get("thermal")
+    sval = str(val).strip().lower() if val is not None else ""
+    if sval in ("", "0", "off", "false", "no"):
+        return False
+    if sval in ("1", "on", "true", "yes"):
+        return True
+    raise SystemExit('--thermal must be "on" or "off"')
+
+
+def thermal_heat_plan(server_cfg, geo, engine="3d"):
+    """Map the profile's TOTAL heat_load [W] onto concrete source regions
+    for the energy equation. Pure numpy/python - importable and
+    host-testable with no solver stack (the worker measures the meshed
+    region volumes and turns these watts into densities [W/m^3]).
+
+    Distribution rules, in order:
+      1. explicit: porous custom zones with "heat_w" get exactly that many
+         watts (C4130 GPU bays, router line cards, switch optics cages -
+         documented engineering estimates in the config).
+      2. cards: GPUs fitted through the wizard are meshed as SOLID PCIe
+         cards - cut OUT of the fluid domain, no cells inside them - so
+         their wattage (runtime key gpu_heat_w, split evenly over the
+         non-NIC cards) is earmarked for the 1 cm washing SHELL of fluid
+         around each card (GPU_SHELL_M; the same shell the airflow
+         telemetry samples). See the worker for the full justification.
+      3. rest_w = heat_load minus the above goes as ONE uniform volumetric
+         density over the union of the implicit heat regions: the CPU
+         heatsink cells plus porous zones with telemetry "cpu"/"gpu" that
+         carry no explicit heat_w. Drive cages, filters and PSU impedance
+         zones deliberately get nothing (their dissipation is small or
+         unmodelled; heat_w pins it explicitly where a config wants it).
+      4. uniform_fallback: no implicit region exists at all (no CPU sinks,
+         no telemetry zones) -> rest_w spreads over the WHOLE fluid
+         domain: energy-conservative, just not localised.
+    engine "2d": a region absent from the mid-height slice (_midplane_hit)
+    cannot receive watts there - its share folds back into rest_w so the
+    planar energy balance still carries the full load.
+
+    Returns {"total_w", "explicit" [(tag, name, W)], "cards"
+    [(name, box, W)], "implicit_tags" [(tag, name)], "rest_w",
+    "uniform_fallback"}."""
+    two_d = str(engine).lower() == "2d"
+    H = geo["dims"][1]
+
+    def in_slice(b):
+        return not two_d or _midplane_hit(b, H)
+
+    total = float(server_cfg.get("heat_load", 0.0))
+    assigned = 0.0
+    explicit, implicit = [], []
+    for z in geo["extra_porous"]:
+        if not in_slice(z["box"]):
+            continue
+        if z.get("heat_w") is not None:
+            explicit.append((z["tag"], z["name"], float(z["heat_w"])))
+            assigned += float(z["heat_w"])
+        elif z["telemetry"] in ("cpu", "gpu"):
+            implicit.append((z["tag"], z["name"]))
+    cards = []
+    gpu_w = float(server_cfg.get("gpu_heat_w") or 0.0)
+    if gpu_w > 0.0:
+        gpu_cards = [(n, b) for n, b in geo["solids"]
+                     if n.startswith("pcie_card_")
+                     and geo["labels"].get(n) != "NIC" and in_slice(b)]
+        if gpu_cards:
+            per_card = gpu_w / len(gpu_cards)
+            cards = [(n, b, per_card) for n, b in gpu_cards]
+            assigned += gpu_w
+    if any(in_slice(b) for _n, b, _k, _c in geo["cpus"]):
+        implicit.insert(0, (VOL_CPUS, "cpu_heatsinks"))
+    rest_w = max(0.0, total - assigned)
+    return {"total_w": total, "explicit": explicit, "cards": cards,
+            "implicit_tags": implicit, "rest_w": rest_w,
+            "uniform_fallback": rest_w > 0.0 and not implicit}
 
 
 def _validate_geometry(geo):
@@ -1825,6 +1975,13 @@ def worker_main(args):
     except (TypeError, ValueError):
         raise SystemExit("--viz-every must be an integer step count")
 
+    # --- energy equation gate (worker args key "thermal", default OFF):
+    # everything thermal below is guarded by this flag, so a run without
+    # it is byte-identical to the pre-thermal solver
+    thermal = thermal_enabled(args)
+    t_inlet = float((server_cfg.get("requirements") or {})
+                    .get("inlet_temp_c", 22.0))
+
     # fan operating point ESTIMATE -> inlet BC level (the meshed CFD
     # impedance is the truth; this just sets the plane velocity). The
     # math - impedance estimate, quadratic-curve intersection AND the
@@ -1887,6 +2044,10 @@ def worker_main(args):
         if viz_every:
             print(f" [worker] mid-run viz export every {viz_every} steps -> "
                   f"{VIZ_DIR_PREFIX}NNNNNN/ + {OUT_VIZ_MANIFEST}")
+        if thermal:
+            print(f" [worker] thermal: energy equation ON - "
+                  f"{float(server_cfg.get('heat_load', 0.0)):g} W system "
+                  f"load, inlet {t_inlet:g} degC")
 
     msh, cell_tags, facet_tags = worker_build_mesh(geo, comm, lc,
                                                    engine=engine)
@@ -1990,6 +2151,193 @@ def worker_main(args):
     flux_front = fem.form(ufl.dot(u_n, n_f) * ds(SURF_FRONT))
     flux_out = fem.form(ufl.dot(u_n, n_f) * ds(SURF_OUTLET))
 
+    # ---- energy equation (worker args key "thermal"; OFF = pre-thermal
+    # behaviour, bit for bit) --------------------------------------------------
+    # Advection-diffusion of temperature T [degC] in the SAME backward-
+    # Euler / semi-implicit style as the momentum step: the advecting
+    # velocity is the lagged u_n, so the extra solve is unconditionally
+    # stable at the existing dt (convective CFL >> 1, accuracy-limited
+    # like the momentum scheme). Diffusivity is the eddy value
+    # NU_EFFECTIVE / PRANDTL_TURB (Reynolds analogy on the constant eddy
+    # viscosity). One extra linear solve per step on the P1 scalar space:
+    # GMRES + block-Jacobi(ILU) - the advection term makes the operator
+    # nonsymmetric (the CG+AMG / CG+Jacobi combos of steps 2/3 need
+    # symmetry) and the rho*cp/dt mass shift keeps it well conditioned,
+    # exactly the reasoning behind the step-1 solver choice.
+    if thermal:
+        from dolfinx import mesh as dmesh
+
+        plan = thermal_heat_plan(server_cfg, geo, engine=engine)
+        T_n = fem.Function(Q)
+        T_n.name = "temperature"
+        T_n.x.array[:] = t_inlet
+        rcp_c = fem.Constant(msh, default_scalar_type(RHO_AIR * CP_AIR))
+        kap_c = fem.Constant(msh, default_scalar_type(
+            RHO_AIR * CP_AIR * NU_EFFECTIVE / PRANDTL_TURB))
+        one_c = fem.Constant(msh, default_scalar_type(1.0))
+
+        # -- volumetric heat sources [W/m^3] on DG0 (one value per cell).
+        # Watts come from thermal_heat_plan; every region's density is
+        # normalised by its volume AS MEASURED ON THIS MESH, so the
+        # injected power is exact and a region that captured no cells is
+        # DETECTED (its share folds into the distributed remainder rather
+        # than silently vanishing into a void). The 2-D engine measures
+        # areas; x chassis height H converts them to the volumes the
+        # W/m^3 densities need (the planar solve is per unit height).
+        Q0T = fem.functionspace(msh, ("DG", 0))
+        q_src = fem.Function(Q0T)
+        q_src.name = "heat_source"
+        h_norm = H if two_d else 1.0
+        src_note = []
+
+        def region_volume(tag):
+            v = fem.assemble_scalar(fem.form(one_c * dx(tag)))
+            return comm.allreduce(v, op=MPI.SUM) * h_norm
+
+        def add_region(tag, dens):
+            for c in cell_tags.find(tag):
+                q_src.x.array[Q0T.dofmap.cell_dofs(c)[0]] += dens
+
+        rest_w = plan["rest_w"]
+        for tag, zname, watts in plan["explicit"]:
+            vol = region_volume(tag)
+            if vol > 1e-12:
+                add_region(tag, watts / vol)
+                src_note.append(f"{zname} {watts:g}W")
+            else:
+                rest_w += watts       # no cells at this mesh/slice
+        # GPU DECISION - the wizard's GPUs are meshed as SOLID PCIe cards,
+        # and solids are CUT OUT of the fluid domain by the CSG step:
+        # there are NO CELLS inside a card, so a volumetric source there
+        # is impossible. The card's watts are released instead into the
+        # 1 cm washing SHELL of fluid cells around it (GPU_SHELL_M - the
+        # same shell the GPU airflow telemetry samples): physically that
+        # is the air the card sheds its heat to, and at this resolution
+        # it is equivalent to a surface heat flux on the card faces while
+        # needing no new facet groups on either engine's mesh. The shell
+        # volume is measured on the mesh (below), so the injected watts
+        # are exact - and a shell that captured no cells folds its share
+        # into the distributed remainder instead of reporting success.
+        for cname, b, watts in plan["cards"]:
+            shell = fem.Function(Q0T)
+            g = GPU_SHELL_M
+            if two_d:      # planar coords: x[0] = chassis x, x[1] = z
+                shell.interpolate(lambda x, b=b: (
+                    (x[0] >= b[0] - g) & (x[0] <= b[3] + g)
+                    & (x[1] >= b[2] - g) & (x[1] <= b[5] + g))
+                    .astype(default_scalar_type))
+            else:
+                shell.interpolate(lambda x, b=b: (
+                    (x[0] >= b[0] - g) & (x[0] <= b[3] + g)
+                    & (x[1] >= b[1] - g) & (x[1] <= b[4] + g)
+                    & (x[2] >= b[2] - g) & (x[2] <= b[5] + g))
+                    .astype(default_scalar_type))
+            vol = comm.allreduce(
+                fem.assemble_scalar(fem.form(shell * dx)),
+                op=MPI.SUM) * h_norm
+            if vol > 1e-12:
+                q_src.x.array[:] += (watts / vol) * shell.x.array
+                src_note.append(f"{geo['labels'].get(cname, cname)} shell "
+                                f"{watts:g}W")
+            else:
+                rest_w += watts
+        if rest_w > 0.0:
+            union_vol = sum(region_volume(t)
+                            for t, _n in plan["implicit_tags"])
+            if union_vol > 1e-12:
+                for tag, _n in plan["implicit_tags"]:
+                    add_region(tag, rest_w / union_vol)
+                src_note.append(f"heat regions {rest_w:g}W")
+            else:              # no heat-carrying component in the domain:
+                vol_all = comm.allreduce(
+                    fem.assemble_scalar(fem.form(one_c * dx)),
+                    op=MPI.SUM) * h_norm
+                q_src.x.array[:] += rest_w / vol_all
+                src_note.append(f"whole domain {rest_w:g}W")
+        q_src.x.scatter_forward()
+        q_injected = comm.allreduce(
+            fem.assemble_scalar(fem.form(q_src * dx)),
+            op=MPI.SUM) * h_norm
+
+        # -- weak forms: same trial/test family as the pressure space
+        Tt, wT = ufl.TrialFunction(Q), ufl.TestFunction(Q)
+        aT = ((rcp_c / dt_c) * Tt * wT * dx
+              + rcp_c * ufl.dot(u_n, ufl.grad(Tt)) * wT * dx
+              + kap_c * ufl.dot(ufl.grad(Tt), ufl.grad(wT)) * dx
+              # backflow guard at the outlet, same device as the step-1
+              # front-face term: vanishes when the outlet is pure outflow
+              - rcp_c * ufl.min_value(ufl.dot(u_n, n_f), 0.0)
+              * Tt * wT * ds(SURF_OUTLET))
+        LT = ((rcp_c / dt_c) * T_n * wT * dx + q_src * wT * dx)
+        aTf, LTf = fem.form(aT), fem.form(LT)
+
+        # -- BCs: inlet air enters at ambient (Dirichlet on the front
+        # face); solid walls adiabatic (natural Neumann - 1U/2U sheet
+        # metal moves negligible heat next to the advective flux);
+        # outlet: natural outflow.
+        bcT_in = fem.dirichletbc(
+            default_scalar_type(t_inlet),
+            fem.locate_dofs_topological(Q, fdim,
+                                        facet_tags.find(SURF_FRONT)), Q)
+        # Fan-plane MIXING condition: the mesh deliberately SPLITS at the
+        # fan wall (two coincident boundary copies), so nothing advects
+        # across it by itself. Server fans are strong mixers, so each
+        # step the DOWNSTREAM copy is held at the mean temperature of the
+        # UPSTREAM copy (uniform fan velocity -> the mass-flow-weighted
+        # mean IS the area mean), carrying the bulk enthalpy across the
+        # split. Not optional: the switch profiles heat the FRONT
+        # component (ASIC before the fans) and would otherwise exhaust at
+        # ambient. The copies share the SURF_FAN tag; they are told apart
+        # by which side of the fan plane their cell sits on.
+        fan_facets = facet_tags.find(SURF_FAN)
+        f2c = msh.topology.connectivity(fdim, msh.topology.dim)
+        fan_cells = np.array([f2c.links(f)[0] for f in fan_facets],
+                             dtype=np.int32)
+        if len(fan_cells):
+            mids = dmesh.compute_midpoints(msh, msh.topology.dim,
+                                           fan_cells)
+            fan_side_z = mids[:, 1 if two_d else 2]
+        else:
+            fan_side_z = np.zeros(0)
+        up_facets = np.sort(fan_facets[fan_side_z < geo["fan_z"]])
+        down_facets = fan_facets[fan_side_z > geo["fan_z"]]
+        T_mix_c = fem.Constant(msh, default_scalar_type(t_inlet))
+        bcT_fan = fem.dirichletbc(
+            T_mix_c, fem.locate_dofs_topological(Q, fdim, down_facets), Q)
+        bcs_T = [bcT_in, bcT_fan]
+        ft_up = dmesh.meshtags(msh, fdim, up_facets,
+                               np.ones(len(up_facets), dtype=np.int32))
+        ds_up = ufl.Measure("ds", domain=msh, subdomain_data=ft_up)
+        T_up_form = fem.form(T_n * ds_up(1))
+        area_up = comm.allreduce(
+            fem.assemble_scalar(fem.form(one_c * ds_up(1))), op=MPI.SUM)
+
+        AT = fp.create_matrix(aTf)
+        bT = fp.create_vector(Q)
+        sT = PETSc.KSP().create(comm)
+        sT.setOperators(AT)
+        sT.setType("gmres")
+        sT.getPC().setType("bjacobi")
+        sT.setTolerances(rtol=KSP_RTOL)
+
+        # mass-flow-weighted outlet temperature: numerator over the outlet
+        # plane; the denominator is the RAW (un-H-scaled) outlet flux, so
+        # the ratio is engine-agnostic
+        T_flux_form = fem.form(T_n * ufl.dot(u_n, n_f) * ds(SURF_OUTLET))
+        t_out_c = t_inlet
+
+        if rank == 0:
+            print(f" [worker] thermal sources: {'; '.join(src_note)} "
+                  f"(injected {q_injected:.1f} W of "
+                  f"{plan['total_w']:g} W config load)")
+            intended = (sum(w for _t, _n, w in plan["explicit"])
+                        + sum(w for _n, _b, w in plan["cards"])
+                        + plan["rest_w"])
+            if intended > 0 and abs(q_injected - intended) > 5e-3 * intended:
+                print(" [worker] WARNING: injected thermal power deviates "
+                      f"from the intended {intended:g} W - a source "
+                      "region resolved to (almost) no cells")
+
     # dashboard sampling grids (identical on every rank; combined on rank 0)
     ncols = int(args.get("cols") or MAIN_COLS_MAX)
     xs = (np.arange(MAIN_ROWS) + 0.5) * W / MAIN_ROWS
@@ -2016,14 +2364,18 @@ def worker_main(args):
         pts_front = np.array([[x, y, 0.012] for y in ys_m for x in xs_m])
         pts_rear = np.array([[x, y, L - 0.015] for y in ys_m for x in xs_m])
 
-    def sample_and_send(step, t_sim, qf, qo):
+    def sample_and_send(step, t_sim, qf, qo, t_out=None):
         # FROZEN WIRE PROTOCOL: both engines emit the SAME header keys and
         # the SAME array names/shapes on the same sampling grid - the
         # launcher dashboard must not need to know which engine ran. The
         # 2-D branch replicates its single plane across the volumetric
         # stack (the mid slice IS the whole 2-D solution) and tiles the
         # front/rear lines to the mini-pane shape; it only ADDS the
-        # "engine" header key.
+        # "engine" header key. The thermal run ADDS "t_out_c" (solved
+        # mass-flow-weighted outlet temperature, degC) - never present
+        # when the energy equation is off, so the off-path frames stay
+        # byte-identical.
+        extra = {} if t_out is None else {"t_out_c": float(t_out)}
         if two_d:
             vals = eval_at_points_parallel(msh, u_n, pts_vol, 2)
             pv = eval_at_points_parallel(msh, p_n, pts_vol, 1)
@@ -2042,7 +2394,7 @@ def worker_main(args):
                 send({"type": "frame", "t": t_sim, "step": step,
                       "steps": n_steps, "q_front": qf, "q_out": qo,
                       "fan_vz": fan_vz, "cells": int(n_cells),
-                      "vol_y": vol_ys, "engine": "2d"},
+                      "vol_y": vol_ys, "engine": "2d", **extra},
                      {"ux": u_mid[:, :, 0], "uz": u_mid[:, :, 1],
                       "speed": sp_mid, "press": p_mid,
                       "vol_speed": sp_vol, "vol_press": p_vol,
@@ -2064,7 +2416,7 @@ def worker_main(args):
             send({"type": "frame", "t": t_sim, "step": step,
                   "steps": n_steps, "q_front": qf, "q_out": qo,
                   "fan_vz": fan_vz, "cells": int(n_cells),
-                  "vol_y": vol_ys},
+                  "vol_y": vol_ys, **extra},
                  {"ux": u_vol[mid, :, :, 0], "uz": u_vol[mid, :, :, 2],
                   "speed": sp_vol[mid], "press": p_vol[mid],
                   "vol_speed": sp_vol, "vol_press": p_vol,
@@ -2092,10 +2444,16 @@ def worker_main(args):
         # name the EXACT dataset file carrying each array: dolfinx's
         # '<name>.vtu' is a collection INDEX and, when write_mesh() was
         # used, the first numbered piece set is mesh-only - the reader
-        # must not have to guess (see _viz_field_file)
+        # must not have to guess (see _viz_field_file). "temperature"
+        # joins the list ONLY when the energy equation ran: listing it
+        # unconditionally would resurrect stale temperature files from an
+        # earlier thermal run in the same directory.
+        pairs = [("velocity", "velocity"), ("pressure", "pressure"),
+                 ("zones", "zone")]
+        if thermal:
+            pairs.append(("temperature", "temperature"))
         fields = {}
-        for base, arr in (("velocity", "velocity"),
-                          ("pressure", "pressure"), ("zones", "zone")):
+        for base, arr in pairs:
             path = _viz_field_file(vdir, base)
             if path:
                 fields[base] = {"file": path, "array": arr}
@@ -2128,9 +2486,12 @@ def worker_main(args):
             # handled without risking a collective mismatch, so (like the
             # final export) only uniform failures are survivable - the
             # realistic ones (permissions, missing dir) were caught above
-            for base, func in (("velocity", viz_state["u"]),
-                               ("pressure", p_n),
-                               ("zones", viz_state["zone"])):
+            bases = [("velocity", viz_state["u"]),
+                     ("pressure", p_n),
+                     ("zones", viz_state["zone"])]
+            if thermal:
+                bases.append(("temperature", T_n))
+            for base, func in bases:
                 with VTKFile(comm, os.path.join(vdir, base + ".vtu"),
                              "w") as vtk:
                     vtk.write_function(func)
@@ -2144,6 +2505,7 @@ def worker_main(args):
                 "type": "viz", "step": step, "steps": n_steps, "t": t_sim,
                 "dt": dt, "engine": engine, "cells": int(n_cells),
                 "dir": vdir, "fields": _viz_fields(vdir),
+                "profile": args.get("profile"),
                 "geometry": _viz_geometry(geo), "done": False})
             viz_dirs.append(vdir)
             while len(viz_dirs) > VIZ_KEEP_DIRS:
@@ -2197,9 +2559,38 @@ def worker_main(args):
         p_n.x.array[:] = p_n.x.array + phi.x.array
         p_n.x.scatter_forward()
 
+        if thermal:
+            # step 4: energy equation. Mixing plane first: the downstream
+            # fan copy rides on the upstream mean of the PREVIOUS step's
+            # field (a one-dt transport lag through the fan - physical).
+            # The matrix is reassembled every step like A1: the advecting
+            # u_n changed.
+            T_mix_c.value = (comm.allreduce(
+                fem.assemble_scalar(T_up_form), op=MPI.SUM) / area_up
+                if area_up > 1e-12 else t_inlet)
+            AT.zeroEntries()
+            fp.assemble_matrix(AT, aTf, bcs=bcs_T)
+            AT.assemble()
+            with bT.localForm() as lf:
+                lf.set(0)
+            fp.assemble_vector(bT, LTf)
+            fp.apply_lifting(bT, [aTf], [bcs_T])
+            bT.ghostUpdate(addv=PETSc.InsertMode.ADD_VALUES,
+                           mode=PETSc.ScatterMode.REVERSE)
+            fp.set_bc(bT, bcs_T)
+            sT.solve(bT, T_n.x.petsc_vec)
+            T_n.x.scatter_forward()
+
         t_sim = (step + 1) * dt
         qf = comm.allreduce(fem.assemble_scalar(flux_front), op=MPI.SUM)
         qo = comm.allreduce(fem.assemble_scalar(flux_out), op=MPI.SUM)
+        if thermal:
+            # exhaust temperature: mass-flow-weighted outlet mean over the
+            # RAW fluxes (numerator and denominator share the 2-D line
+            # units, so the ratio is engine-agnostic)
+            tq = comm.allreduce(fem.assemble_scalar(T_flux_form),
+                                op=MPI.SUM)
+            t_out_c = tq / qo if abs(qo) > 1e-12 else t_inlet
         if two_d:
             # planar line flux [m^2/s] -> volumetric equivalent [m^3/s]
             # (uniform-over-height assumption) so the streamed q_front/
@@ -2207,12 +2598,15 @@ def worker_main(args):
             qf *= H
             qo *= H
         if (step + 1) % SEND_EVERY == 0 or step == n_steps - 1:
-            sample_and_send(step + 1, t_sim, qf, qo)
+            sample_and_send(step + 1, t_sim, qf, qo,
+                            t_out_c if thermal else None)
         if viz_every and (step + 1) % viz_every == 0:
             viz_export(step + 1, t_sim)
         if rank == 0 and sock is None and (step + 1) % 10 == 0:
+            t_note = f" T_out={t_out_c:.1f}C" if thermal else ""
             print(f" [worker] t={t_sim:6.1f}s step {step+1}/{n_steps} "
-                  f"q_out={qo:.4f} m^3/s ({qo * M3S_TO_CFM:.1f} CFM)")
+                  f"q_out={qo:.4f} m^3/s ({qo * M3S_TO_CFM:.1f} CFM)"
+                  f"{t_note}")
 
     # ---- final summary: requirements inputs ---------------------------------
     p_arr = p_n.x.array
@@ -2308,6 +2702,17 @@ def worker_main(args):
 
     qf = comm.allreduce(fem.assemble_scalar(flux_front), op=MPI.SUM)
     qo = comm.allreduce(fem.assemble_scalar(flux_out), op=MPI.SUM)
+    if thermal:
+        # final exhaust temperature from the SOLVED field (mass-flow-
+        # weighted outlet mean over the raw fluxes) + the field maximum;
+        # collectives, so every rank participates
+        tq_fin = comm.allreduce(fem.assemble_scalar(T_flux_form),
+                                op=MPI.SUM)
+        t_exhaust_c = tq_fin / qo if abs(qo) > 1e-12 else t_inlet
+        n_own_t = Q.dofmap.index_map.size_local * Q.dofmap.index_map_bs
+        t_max_c = comm.allreduce(
+            float(T_n.x.array[:n_own_t].max()) if n_own_t else -1e30,
+            op=MPI.MAX)
     if two_d:
         qf *= H               # line flux -> volumetric equivalent, as in
         qo *= H               # the time loop (uniform-over-height)
@@ -2349,10 +2754,29 @@ def worker_main(args):
             "sim_time": sim_time, "dt": dt,
             "wall_time": time.time() - t_wall,
         }
+        if thermal:
+            # ADDED keys (never present with thermal off, so the frozen
+            # off-wire stays byte-identical): the SOLVED exhaust
+            # temperature next to the bulk balance estimate the launcher
+            # table always showed, so the two can be compared directly.
+            summary["thermal"] = True
+            summary["t_inlet_c"] = float(t_inlet)
+            summary["t_exhaust_c"] = float(t_exhaust_c)
+            summary["t_exhaust_bulk_c"] = float(
+                t_inlet + plan["total_w"]
+                / (RHO_AIR * max(qo, 1e-9) * CP_AIR))
+            summary["t_max_c"] = float(t_max_c)
+            summary["heat_load_w"] = float(plan["total_w"])
+            summary["q_src_w"] = float(q_injected)
         send(summary)
         print(f" [worker] done: t={sim_time:.1f}s in "
               f"{summary['wall_time']:.0f}s wall, q_out={qo:.4f} m^3/s "
               f"({qo * M3S_TO_CFM:.1f} CFM), p_min={p_min:.0f} Pa")
+        if thermal:
+            print(f" [worker] thermal: exhaust {t_exhaust_c:.1f} degC "
+                  f"solved vs {summary['t_exhaust_bulk_c']:.1f} degC bulk "
+                  f"estimate (inlet {t_inlet:g} degC, "
+                  f"T_max {t_max_c:.1f} degC)")
 
     # ---- VTU export (always, even if the UI died) ---------------------------
     from dolfinx.io import VTKFile
@@ -2363,8 +2787,11 @@ def worker_main(args):
     zone = fem.Function(Q0); zone.name = "zone"
     for c, val in zip(cell_tags.indices, cell_tags.values):
         zone.x.array[Q0.dofmap.cell_dofs(c)[0]] = val
-    for path, func in ((OUT_VELOCITY, u_out), (OUT_PRESSURE, p_n),
-                       (OUT_ZONES, zone)):
+    out_fields = [(OUT_VELOCITY, u_out), (OUT_PRESSURE, p_n),
+                  (OUT_ZONES, zone)]
+    if thermal:
+        out_fields.append((OUT_TEMPERATURE, T_n))   # P1 already, like p_n
+    for path, func in out_fields:
         with VTKFile(comm, path, "w") as vtk:
             vtk.write_mesh(msh)
             vtk.write_function(func)
@@ -2385,11 +2812,13 @@ def worker_main(args):
                 "t": n_steps * dt, "dt": dt, "engine": engine,
                 "cells": int(n_cells), "dir": ".",
                 "fields": _viz_fields("."),
+                "profile": args.get("profile"),
                 "geometry": _viz_geometry(geo), "done": True})
         except OSError:
             pass
     if rank == 0:
-        print(" [worker] VTU fields written (velocity/pressure/zones)")
+        print(" [worker] VTU fields written (velocity/pressure/zones"
+              + ("/temperature)" if thermal else ")"))
         send({"type": "end"})
         if sock is not None:
             sock.close()
@@ -3214,10 +3643,38 @@ def requirements_table(reqs, summary, heat_load):
     tbl.add_row("Mass balance (front vs outlet)", "-",
                 f"{100.0 * abs(summary['q_out'] + summary['q_front']) / max(summary['q_fan'], 1e-9):.2f} %",
                 "[dim]info[/]")
-    tbl.add_row(f"Outlet air temperature ({heat_load:.0f} W load)",
-                f"<= {reqs['outlet_temp_max_c']:.1f} degC",
-                f"{t_out:.1f} degC",
-                status(t_out <= reqs["outlet_temp_max_c"]))
+    # With the energy equation on, the SOLVED mass-flow-weighted outlet
+    # temperature supersedes the bulk balance above: the bulk figure
+    # assumes every watt reaches the outlet air perfectly mixed, so it
+    # cannot show a hot spot or short-circuited flow. Both are printed so
+    # they can be compared - agreement is the conservation check, and a
+    # gap is the interesting result. Without thermal, unchanged.
+    if summary.get("thermal"):
+        t_solved = float(summary["t_exhaust_c"])
+        t_bulk = float(summary.get("t_exhaust_bulk_c", t_out))
+        tbl.add_row(f"Outlet air temperature ({heat_load:.0f} W load)",
+                    f"<= {reqs['outlet_temp_max_c']:.1f} degC",
+                    f"{t_solved:.1f} degC solved "
+                    f"({t_bulk:.1f} bulk est.)",
+                    status(t_solved <= reqs["outlet_temp_max_c"]))
+        t_max = summary.get("t_max_c")
+        if t_max is not None:
+            tbl.add_row("Peak air temperature (hot spot)", "-",
+                        f"{float(t_max):.1f} degC", "[dim]info[/]")
+        q_src = summary.get("q_src_w")
+        load_w = summary.get("heat_load_w")
+        if q_src is not None and load_w:
+            # energy audit: watts actually injected vs watts configured
+            err = 100.0 * abs(float(q_src) - float(load_w)) / float(load_w)
+            tbl.add_row("Heat injected vs configured", "-",
+                        f"{float(q_src):.0f} W of {float(load_w):.0f} W "
+                        f"({err:.1f} % off)",
+                        status(err <= 1.0))
+    else:
+        tbl.add_row(f"Outlet air temperature ({heat_load:.0f} W load)",
+                    f"<= {reqs['outlet_temp_max_c']:.1f} degC",
+                    f"{t_out:.1f} degC (bulk estimate)",
+                    status(t_out <= reqs["outlet_temp_max_c"]))
     tbl.add_row("Minimum static pressure (field)",
                 f">= {reqs['pressure_min_pa']:.0f} Pa",
                 f"{summary['p_min']:.0f} Pa @ {tuple(summary['p_min_at'])}",
@@ -3716,9 +4173,16 @@ def launcher_wizard(console, cfg, config_path):
                       f"[{FAN_DUTY_MIN:g}, {FAN_DUTY_MAX:g}] - "
                       f"clamped to {clamped:g}[/]")
         fan_duty = clamped
+    thermal = Confirm.ask(
+        "  Solve the energy equation (real air temperature rise)?",
+        default=False, console=console)
     summary.add_row("Solver engine",
                     "3-D volumetric" if engine == "3d" else "2-D planar")
     summary.add_row("Fan duty", f"{fan_duty * 100:.0f} % of rated RPM")
+    summary.add_row("Energy equation",
+                    f"on - {s['heat_load']:.0f} W over the heat sources, "
+                    f"intake {s['requirements']['inlet_temp_c']:.0f} degC"
+                    if thermal else "off (bulk outlet estimate only)")
 
     console.print(Panel(summary, title="Run parameters", border_style="cyan"))
     if not Confirm.ask("  Launch the MPI solver?", default=True,
@@ -3728,7 +4192,8 @@ def launcher_wizard(console, cfg, config_path):
     return {"profile": profile, "profile_runtime": s, "hw": hw,
             "fan": fan, "fan_custom": fan_custom,
             "cores": cores, "sim_time": sim_time, "dt": dt,
-            "mesh": mesh_arg, "engine": engine, "fan_duty": fan_duty}
+            "mesh": mesh_arg, "engine": engine, "fan_duty": fan_duty,
+            "thermal": thermal}
 
 
 def detect_mpi_flags():
@@ -3792,6 +4257,7 @@ def launcher_main(config_path):
            "--mesh", params["mesh"],
            "--engine", params.get("engine", "3d"),
            "--fan-duty", str(params.get("fan_duty", 1.0)),
+           "--thermal", "on" if params.get("thermal") else "off",
            "--callback-port", str(port), "--cols", str(ncols),
            "--config", run_cfg_path]
     # Mid-run field export costs real I/O, so only enable it when the host
@@ -4086,6 +4552,9 @@ def main():
             "engine": _arg(argv, "--engine", "3d"),
             "fan_duty": _arg(argv, "--fan-duty"),
             "viz_every": _arg(argv, "--viz-every"),
+            # energy equation gate; thermal_enabled() validates the value
+            # and defaults to off, so a plain run stays pre-thermal.
+            "thermal": _arg(argv, "--thermal"),
         }
         worker_main(args)     # config validation happens inside (rank 0)
         return

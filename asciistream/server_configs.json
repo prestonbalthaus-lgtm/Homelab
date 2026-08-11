@@ -659,7 +659,8 @@
           ],
           "zeta": 170.0,
           "permeability": 1.5e-07,
-          "telemetry": "gpu"
+          "telemetry": "gpu",
+          "heat_w": 300.0
         },
         {
           "name": "gpu_2",
@@ -675,7 +676,8 @@
           ],
           "zeta": 170.0,
           "permeability": 1.5e-07,
-          "telemetry": "gpu"
+          "telemetry": "gpu",
+          "heat_w": 300.0
         },
         {
           "name": "gpu_3",
@@ -691,7 +693,8 @@
           ],
           "zeta": 170.0,
           "permeability": 1.5e-07,
-          "telemetry": "gpu"
+          "telemetry": "gpu",
+          "heat_w": 300.0
         },
         {
           "name": "gpu_4",
@@ -707,7 +710,8 @@
           ],
           "zeta": 170.0,
           "permeability": 1.5e-07,
-          "telemetry": "gpu"
+          "telemetry": "gpu",
+          "heat_w": 300.0
         },
         {
           "name": "psu_bank",
@@ -793,7 +797,8 @@
           ],
           "zeta": 55.0,
           "permeability": 5e-07,
-          "telemetry": "optics"
+          "telemetry": "optics",
+          "heat_w": 115.0
         },
         {
           "name": "psu_1",
@@ -894,7 +899,8 @@
           ],
           "zeta": 55.0,
           "permeability": 5e-07,
-          "telemetry": "optics"
+          "telemetry": "optics",
+          "heat_w": 115.0
         },
         {
           "name": "psu_1",
@@ -1017,7 +1023,8 @@
             0.4
           ],
           "zeta": 110.0,
-          "permeability": 3e-07
+          "permeability": 3e-07,
+          "heat_w": 1250.0
         },
         {
           "name": "rp_esp_bay",
@@ -1032,7 +1039,8 @@
             0.4
           ],
           "zeta": 90.0,
-          "permeability": 3e-07
+          "permeability": 3e-07,
+          "heat_w": 550.0
         }
       ],
       "mesh_settings": {
@@ -1129,7 +1137,8 @@
           ],
           "zeta": 55.0,
           "permeability": 5e-07,
-          "telemetry": "gpu"
+          "telemetry": "gpu",
+          "heat_w": 250.0
         },
         {
           "name": "psu_shroud",
