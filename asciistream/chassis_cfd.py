@@ -4204,12 +4204,25 @@ def fan_telemetry_table(fan_cfg, n_fans, summary=None):
 
 
 def dba_thermal_banner(summary):
-    """The homelab verdict: did holding the noise limit cook the box?
+    """The homelab verdict, as TWO independent questions - conflating them
+    was a real bug: a high ceiling that never constrained the fans got
+    blamed for an overheat it did not cause, and the advice ("raise the dBA
+    limit") was useless because the fans were already at full duty.
+
+      1. NOISE  - is the simulated combined dBA within the ceiling?
+                  Pass when simulated <= target. A ceiling above what the
+                  fan wall can even produce is simply not binding, which
+                  is a pass, not a failure.
+      2. THERMAL - does the exhaust exceed requirements.outlet_temp_max_c?
+                  Only attributable to the noise limit when the ceiling
+                  ACTUALLY capped the duty (`dba_target_binding`). If the
+                  fans ran flat out and it still cooks, the limit is
+                  innocent and the remedy is heat load or airflow.
 
     Returns a rich renderable, or None when no acoustic target was set.
-    `dba_exhaust_basis` records whether the exhaust figure came from the
-    solved energy equation ("solved") or the bulk balance ("bulk") - the
-    warning says which, because a bulk estimate cannot see a hot spot."""
+    `dba_exhaust_basis` says whether the exhaust figure is the solved
+    energy equation or the bulk balance, because a bulk estimate cannot
+    see a hot spot."""
     s = summary or {}
     if s.get("dba_target") is None:
         return None
@@ -4217,22 +4230,53 @@ def dba_thermal_banner(summary):
     t_max = s.get("outlet_temp_max_c")
     if t_out is None or t_max is None:
         return None
+    tgt = float(s["dba_target"])
     basis = s.get("dba_exhaust_basis", "bulk")
     basis_txt = ("solved energy equation" if basis == "solved"
                  else "bulk balance - run with the energy equation for a "
                       "hot-spot-aware answer")
-    if s.get("dba_overheat"):
-        return Text(
-            f"[THERMAL WARNING: {float(s['dba_target']):g} dBA noise limit "
-            f"starves the chassis] exhaust {float(t_out):.1f} degC exceeds "
-            f"the {float(t_max):.1f} degC ceiling ({basis_txt}). Raise the "
-            "dBA limit, cut the heat load, or accept throttling.",
+    binding = bool(s.get("dba_target_binding"))
+    combined = s.get("dba_combined")
+    noise_txt = (f"{float(combined):.1f} dBA vs the {tgt:g} dBA ceiling"
+                 if combined is not None else f"{tgt:g} dBA ceiling")
+
+    # --- noise verdict -------------------------------------------------
+    if s.get("dba_target_achievable") is False:
+        head = Text(f"[NOISE: UNREACHABLE] {tgt:g} dBA is below what these "
+                    "fans can produce even at the duty floor - the run used "
+                    "the floor and is louder than requested.",
+                    style="bold red")
+    elif s.get("dba_target_met") is False:
+        head = Text(f"[NOISE: OVER TARGET] {noise_txt}.", style="bold red")
+    elif binding:
+        head = Text(f"[NOISE: OK] {noise_txt} - the ceiling capped fan duty "
+                    f"to {float(s.get('dba_target_duty_cap', 1.0)) * 100:.0f}"
+                    " % of rated.", style="green")
+    else:
+        head = Text(f"[NOISE: OK] {noise_txt} - not a binding constraint, "
+                    "the fans never needed to slow down.", style="green")
+
+    # --- thermal verdict, attributed honestly --------------------------
+    if not s.get("dba_overheat"):
+        body = Text(f"  Thermal: exhaust {float(t_out):.1f} degC is within "
+                    f"the {float(t_max):.1f} degC ceiling ({basis_txt}).",
+                    style="green")
+    elif binding:
+        body = Text(
+            f"  [THERMAL WARNING] holding {tgt:g} dBA starves the chassis: "
+            f"exhaust {float(t_out):.1f} degC exceeds the "
+            f"{float(t_max):.1f} degC ceiling ({basis_txt}). Raise the dBA "
+            "limit, cut the heat load, or accept throttling.",
             style="bold red")
-    return Text(
-        f"noise limit {float(s['dba_target']):g} dBA holds without "
-        f"overheating: exhaust {float(t_out):.1f} degC vs the "
-        f"{float(t_max):.1f} degC ceiling ({basis_txt})",
-        style="green")
+    else:
+        body = Text(
+            f"  [THERMAL WARNING] exhaust {float(t_out):.1f} degC exceeds "
+            f"the {float(t_max):.1f} degC ceiling ({basis_txt}) with the "
+            "fans at FULL duty - the noise ceiling is not the cause and "
+            "raising it will not help. Cut the heat load, fit stronger "
+            "fans, or accept throttling.",
+            style="bold red")
+    return Group(head, body)
 
 
 def write_report(server_cfg, params, fan_cfg, summary, comp_rows, fails,
