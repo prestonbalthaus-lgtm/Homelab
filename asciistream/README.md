@@ -469,7 +469,32 @@ Standard zones are generated from plain numbers: drive cage (optional —
 `drive_bay_count: 0` skips it), `cpu_sockets` porous heatsinks (0 allowed;
 `cpu_label` renames them, e.g. `"ASIC"`), DIMM banks sized from
 `total_dimm_slots`, `populated_pcie_slots` solid cards, and the fan wall at
-`fan_wall_z`. Anything else is a **custom zone**:
+`fan_wall_z`.
+
+**Drive arrays.** Without `drive_array` the cage is the legacy single
+full-width porous slab (unchanged, bit for bit). Add `drive_array` and each
+populated bay becomes its own porous box, with unpopulated bays left as
+**open fluid domain**:
+
+```jsonc
+"drive_bay_count": 8,          // total bay CAPACITY
+"drive_bay_size": "3.5",       // physical bay class (default: from drive_bay_type)
+"drive_array": [
+  { "count": 2, "size": "2.5" },              // 2.5in NVMe/SAS
+  { "count": 4, "size": "3.5", "label": "SAS" }  // label is optional
+]
+```
+`size` accepts `2.5`/`3.5` with or without `in`/a type suffix. Counts must
+sum to at most `drive_bay_count` and must physically fit the bay grid — a
+3.5" drive cannot stand in a 1U bay, and an over-large mix is refused with a
+clear error rather than silently overlapping. `[]` means every bay empty.
+Per-class impedance uses the existing 2.5"/3.5" ζ multipliers, so the physics
+matches the legacy cage. Other optional keys: `pcie_x_band: [x0, x1]`
+(constrains where cards are laid out, needed when PSUs or risers flank the
+rear), `pcie_max_slots`, and `fan_momentum: true` on a PSU zone to solve its
+internal fan as a real momentum source.
+
+Anything else is a **custom zone**:
 
 ```jsonc
 "custom_zones": [
