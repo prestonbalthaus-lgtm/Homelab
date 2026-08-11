@@ -5,6 +5,12 @@
 *.xdmf
 cfd_report_*.txt
 
+# --- mid-run visualization export (ring buffer + manifest, host viewer) -------
+viz_step_*/
+viz_manifest.json
+viz_manifest.json.tmp
+.asciistream_viewer_ready
+
 # --- generated plots (chassis_fan_tool.py / plot_profile.py) -------------------
 pq_curves.png
 server_velocity_profile.png

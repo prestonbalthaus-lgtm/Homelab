@@ -1,19 +1,21 @@
 """Fan operating point: the quadratic fan-curve / system-impedance
-intersection computed in worker_main() before the solve.
+intersection, plus the Fan Affinity Law RPM scaling.
 
-The formula lives inline in worker_main (which imports mpi4py at entry, so
-it cannot run on the host); this suite replicates it VERBATIM from
-chassis_cfd.py using the module's own constants, pinning the physics:
+These tests call the PRODUCTION function `chassis_cfd.fan_operating_point`
+directly - it is module-level and pure numpy, so it imports on the host
+with no solver stack. There is deliberately no replica of the formula
+here: a test that re-implements the maths it is meant to guard cannot
+detect a regression in the real code.
 
     zeta_est = drive_zeta + 0.5*cpu_zeta + baseline_zeta
                + sum(zone zeta * covered cross-section fraction)
     K_est    = RHO_AIR * zeta_est / (2 * area^2)
-    qmax     = max_cfm / M3S_TO_CFM * fan_count
-    pmax     = max_mmh2o * 9.80665
+    qmax     = max_cfm / M3S_TO_CFM * fan_count      (x duty)
+    pmax     = max_mmh2o * 9.80665                   (x duty^2)
     q_op     = sqrt(pmax / (K_est + pmax / qmax^2))
 
-If a worker-side refactor changes the operating-point maths, this file is
-the tripwire: update BOTH or justify the physics change.
+Affinity laws: flow ~ N, pressure ~ N^2, shaft power ~ N^3, and
+dBA ~ dBA_rated + 50*log10(N/N_rated).
 """
 import copy
 import math
@@ -23,23 +25,13 @@ import pytest
 from conftest import FAN_NAMES, PROFILE_NAMES, cc
 
 
-def operating_point(server_cfg, fan_cfg):
-    """Replica of chassis_cfd.worker_main's estimate (see module docstring)."""
+def operating_point(server_cfg, fan_cfg, duty=1.0):
+    """Thin adapter over the production function, preserving this suite's
+    (q_op, qmax, area) shape. Single source of truth: chassis_cfd."""
     geo = cc.build_geometry(server_cfg)
     W, H, _L = geo["dims"]
-    area = W * H
-    zeta_est = (float(server_cfg.get("drive_zeta", 0.0))
-                + 0.5 * float(server_cfg.get("cpu_zeta", 0.0))
-                + float(server_cfg.get("baseline_zeta", 25.0)))
-    for z in geo["extra_porous"]:
-        b = z["box"]
-        afrac = (b[3] - b[0]) * (b[4] - b[1]) / area
-        zeta_est += z["zeta"] * min(afrac, 1.0)
-    K_est = cc.RHO_AIR * zeta_est / (2.0 * area**2)
-    qmax = fan_cfg["max_cfm"] / cc.M3S_TO_CFM * server_cfg["fan_count"]
-    pmax = fan_cfg["max_mmh2o"] * 9.80665
-    q_op = float(math.sqrt(pmax / (K_est + pmax / qmax**2)))
-    return q_op, qmax, area
+    r = cc.fan_operating_point(server_cfg, fan_cfg, geo, duty=duty)
+    return r["q_op"], r["qmax"], W * H
 
 
 @pytest.mark.parametrize("profile", PROFILE_NAMES, indirect=True)
@@ -108,3 +100,64 @@ def test_stronger_fan_moves_more_air(cfg):
     q_weak, _, _ = operating_point(s, weak)
     q_strong, _, _ = operating_point(s, strong)
     assert q_strong > q_weak
+
+
+# --- Fan Affinity Laws -------------------------------------------------------
+# Regression gate measured in-container on the pristine baseline: profile
+# 6029U + supermicro-fan-0118l4 at rated RPM must stay at 129.0 CFM ->
+# 1.77 m/s plane velocity. If this moves, the rated case has changed.
+def test_rated_duty_matches_measured_baseline(cfg):
+    s = cfg["servers"]["6029U"]
+    r = cc.fan_operating_point(s, cfg["fans"]["supermicro-fan-0118l4"],
+                               cc.build_geometry(s), duty=1.0)
+    assert r["cfm"] == pytest.approx(129.0, abs=0.05)
+    assert r["fan_vz"] == pytest.approx(1.77, abs=0.005)
+
+
+@pytest.mark.parametrize("duty", [0.25, 0.5, 0.75, 1.0, 1.25])
+def test_affinity_flow_scales_linearly_with_rpm(cfg, duty):
+    """Q ~ N. Scaling qmax by d and pmax by d^2 makes the curve/impedance
+    intersection scale EXACTLY linearly in d - the algebra cancels."""
+    s = cfg["servers"]["6029U"]
+    fan, geo = cfg["fans"]["arctic-s8038-10k"], cc.build_geometry(s)
+    base = cc.fan_operating_point(s, fan, geo, duty=1.0)["q_op"]
+    got = cc.fan_operating_point(s, fan, geo, duty=duty)["q_op"]
+    assert got == pytest.approx(duty * base, rel=1e-9)
+
+
+@pytest.mark.parametrize("duty", [0.5, 0.8, 1.2])
+def test_affinity_power_cubes_and_dba_log_law(cfg, duty):
+    """Shaft power ~ N^3 and dBA ~ dBA_rated + 50*log10(N/N_rated)."""
+    s = cfg["servers"]["6029U"]
+    fan, geo = cfg["fans"]["supermicro-fan-0118l4"], cc.build_geometry(s)
+    rated = cc.fan_operating_point(s, fan, geo, duty=1.0)
+    got = cc.fan_operating_point(s, fan, geo, duty=duty)
+    assert got["watts"] == pytest.approx(rated["watts"] * duty**3, rel=1e-9)
+    assert got["dba"] == pytest.approx(
+        rated["dba"] + 50.0 * math.log10(duty), abs=1e-6)
+    assert got["rpm"] == pytest.approx(rated["rpm_rated"] * duty, rel=1e-9)
+
+
+def test_lower_duty_strictly_reduces_flow_and_noise(cfg):
+    """Monotonicity: throttling a fan must not increase flow or noise."""
+    s = cfg["servers"]["6029U"]
+    fan, geo = cfg["fans"]["supermicro-fan-0118l4"], cc.build_geometry(s)
+    prev = None
+    for duty in (0.2, 0.4, 0.6, 0.8, 1.0):
+        r = cc.fan_operating_point(s, fan, geo, duty=duty)
+        if prev is not None:
+            assert r["q_op"] > prev["q_op"]
+            assert r["watts"] > prev["watts"]
+            assert r["dba"] > prev["dba"]
+        prev = r
+
+
+def test_custom_fan_has_no_rated_telemetry(cfg):
+    """An unrated custom fan cannot report scaled rpm/dBA/W - those must
+    come back None rather than a fabricated number."""
+    fan = cc.custom_fan_cfg(95, 38)
+    s = cfg["servers"]["6029U"]
+    r = cc.fan_operating_point(s, fan, cc.build_geometry(s), duty=0.6)
+    assert r["q_op"] > 0.0
+    for k in ("rpm_rated", "rpm", "watts", "dba"):
+        assert r[k] is None, f"{k} should be None for an unrated fan"

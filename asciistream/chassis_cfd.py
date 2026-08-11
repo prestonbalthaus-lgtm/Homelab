@@ -341,6 +341,13 @@ VIZ_DIR_PREFIX   = "viz_step_"
 VIZ_KEEP_DIRS    = 2     # current + previous (a slow reader may still hold
                          # the previous directory open); older ones removed
 
+# The host-side PyVista sidecar drops this marker in the shared work dir
+# while it is alive. The launcher only turns mid-run viz export ON when it
+# is present, so a run with no viewer attached pays zero export I/O and
+# stays byte-identical to the pre-dual-engine behaviour.
+VIEWER_READY_FILE = ".asciistream_viewer_ready"
+VIZ_EVERY_DEFAULT = 5    # steps between exports when a viewer IS attached
+
 # --- Fan affinity laws (worker args key "fan_duty" = N/N_rated) ---------------
 # Q ~ N, dP ~ N^2, shaft power ~ N^3, dBA ~ dBA_rated + 50*log10(N/N_rated).
 # Duty is clamped to a sane PWM-style band: below 5 % a server fan stalls,
@@ -3650,22 +3657,56 @@ def thermal_banners(fails):
                  style="bold red blink") for label in fails]
 
 
-def fan_telemetry_table(fan_cfg, n_fans):
-    """Acoustic + power estimate at the operating RPM. Assumption (stated):
-    fans run at rated RPM (100 % duty; no thermal PWM is modelled). N equal
-    sources combine as +10*log10(N) - a free-field engineering estimate."""
+def fan_telemetry_table(fan_cfg, n_fans, summary=None):
+    """Acoustic + power estimate at the operating RPM. N equal sources
+    combine as +10*log10(N) - a free-field engineering estimate.
+
+    When the solver reports duty-scaled values (`summary` carries the
+    fan_* keys written by fan_operating_point), the table shows the
+    ACTUAL operating point via the Fan Affinity Laws - flow ~ N,
+    pressure ~ N^2, shaft power ~ N^3, and dBA ~ +50*log10(N2/N1).
+    Without them it falls back to the rated 100 %-duty figures, so a
+    headless/legacy run renders exactly as before."""
+    duty = (summary or {}).get("fan_duty")
+    scaled = duty is not None and abs(float(duty) - 1.0) > 1e-9
+    cap = ("fans modeled at rated RPM (100% duty; no thermal PWM); "
+           "dBA/W are config estimates")
+    if scaled:
+        cap = (f"fan affinity laws at {float(duty) * 100:.0f} % of rated RPM "
+               "(Q~N, dP~N^2, W~N^3); dBA/W are config estimates")
     tbl = Table(title="Fan acoustics & power (est.)", box=box.SIMPLE_HEAVY,
-                title_style="bold",
-                caption="fans modeled at rated RPM (100% duty; no thermal "
-                        "PWM); dBA/W are config estimates")
+                title_style="bold", caption=cap)
     tbl.add_column("Quantity")
     tbl.add_column("Value", justify="right")
-    rpm = fan_cfg.get("rpm", "-")
-    dba = fan_cfg.get("max_dBA")
-    watts = fan_cfg.get("max_wattage")
+
+    def pick(key, fallback):
+        """Duty-scaled value when the solver supplied one, else rated."""
+        v = (summary or {}).get(key)
+        return fallback if v is None else v
+
+    rpm = pick("fan_rpm_scaled", fan_cfg.get("rpm", "-"))
+    dba = pick("fan_dba_scaled", fan_cfg.get("max_dBA"))
+    watts = pick("fan_watts_scaled", fan_cfg.get("max_wattage"))
     tbl.add_row("Fan model", fan_cfg["display"])
     tbl.add_row("Fan count", str(n_fans))
-    tbl.add_row("Operating RPM (rated, 100% duty)", str(rpm))
+    if scaled:
+        rated = (summary or {}).get("fan_rpm_rated")
+        rpm_txt = (f"{rpm:,.0f}" if isinstance(rpm, (int, float))
+                   else str(rpm))
+        if isinstance(rated, (int, float)):
+            rpm_txt += f"  (rated {rated:,.0f})"
+        tbl.add_row("Fan duty", f"{float(duty) * 100:.0f} % of rated")
+        tbl.add_row("Operating RPM (duty-scaled)", rpm_txt)
+        cfm = (summary or {}).get("fan_cfm_scaled")
+        mmh = (summary or {}).get("fan_mmh2o_scaled")
+        if cfm is not None:
+            tbl.add_row("Per-fan max flow (scaled)", f"{cfm:.1f} CFM")
+        if mmh is not None:
+            tbl.add_row("Per-fan max static (scaled)", f"{mmh:.1f} mmH2O")
+    else:
+        tbl.add_row("Operating RPM (rated, 100% duty)",
+                    f"{rpm:,.0f}" if isinstance(rpm, (int, float))
+                    else str(rpm))
     tbl.add_row("Per-fan noise", f"{dba:.1f} dBA" if dba else "n/a")
     if dba:
         tbl.add_row("Combined noise (free-field estimate)",
@@ -3715,7 +3756,7 @@ def write_report(server_cfg, params, fan_cfg, summary, comp_rows, fails,
                      markup=False)
     else:
         rc.print("no thermal warnings - all component airflow thresholds met")
-    rc.print(fan_telemetry_table(fan_cfg, server_cfg["fan_count"]))
+    rc.print(fan_telemetry_table(fan_cfg, server_cfg["fan_count"], summary))
     rc.print()
     rc.print(build_main_panel(scene))
     rc.print(build_legend())
@@ -3974,6 +4015,10 @@ def launcher_wizard(console, cfg, config_path):
         # dies with the traceback - deliberately unhandled, per spec
         enforce_ultra_ram(mesh_level)
         mesh_mm = float(ms[mesh_level]["element_size_mm"])
+    # Deliberately the 3-D estimate: the engine is chosen after the mesh
+    # prompt, so this stays a conservative upper bound. A 2-D run needs
+    # roughly an order of magnitude less, so the RAM guidance here only
+    # ever over-warns - it never lets an oversized choice through.
     n_est = est_cells(build_geometry(s), mesh_mm / 1000.0)
     if mesh_level != "ultra":               # soft confirm for the rest
         try:                                # container-visible MemTotal check
@@ -4016,6 +4061,31 @@ def launcher_wizard(console, cfg, config_path):
     summary.add_row("Intake -> exhaust ceiling",
                     f"{s['requirements']['inlet_temp_c']:.1f} -> "
                     f"{s['requirements']['outlet_temp_max_c']:.1f} degC")
+
+    # --- dual engine + fan duty ----------------------------------------
+    # Asked last so the existing prompt order (and the README's numbered
+    # walkthrough of it) stays intact.
+    console.print("\n [bold]Solver engine[/] - [cyan]3d[/] volumetric is the "
+                  "full-fidelity solve; [cyan]2d[/] planar solves only the\n"
+                  " mid-height slice: ~10x fewer cells and far quicker, but "
+                  "it models no floor/ceiling\n friction and so "
+                  "OVER-predicts through-flow. Use 2d to explore, 3d to "
+                  "conclude.")
+    engine = Prompt.ask("  Engine", choices=["3d", "2d"], default="3d",
+                        console=console)
+    fan_duty = FloatPrompt.ask(
+        "  Fan duty as a fraction of rated RPM (affinity laws: flow ~ N, "
+        "pressure ~ N^2, power ~ N^3)", default=1.0, console=console)
+    if not (FAN_DUTY_MIN <= fan_duty <= FAN_DUTY_MAX):
+        clamped = min(max(fan_duty, FAN_DUTY_MIN), FAN_DUTY_MAX)
+        console.print(f"  [yellow]duty {fan_duty:g} outside "
+                      f"[{FAN_DUTY_MIN:g}, {FAN_DUTY_MAX:g}] - "
+                      f"clamped to {clamped:g}[/]")
+        fan_duty = clamped
+    summary.add_row("Solver engine",
+                    "3-D volumetric" if engine == "3d" else "2-D planar")
+    summary.add_row("Fan duty", f"{fan_duty * 100:.0f} % of rated RPM")
+
     console.print(Panel(summary, title="Run parameters", border_style="cyan"))
     if not Confirm.ask("  Launch the MPI solver?", default=True,
                        console=console):
@@ -4024,7 +4094,7 @@ def launcher_wizard(console, cfg, config_path):
     return {"profile": profile, "profile_runtime": s, "hw": hw,
             "fan": fan, "fan_custom": fan_custom,
             "cores": cores, "sim_time": sim_time, "dt": dt,
-            "mesh": mesh_arg}
+            "mesh": mesh_arg, "engine": engine, "fan_duty": fan_duty}
 
 
 def detect_mpi_flags():
@@ -4086,8 +4156,14 @@ def launcher_main(config_path):
            "--profile", params["profile"], "--fan", params["fan"],
            "--sim-time", str(params["sim_time"]), "--dt", str(params["dt"]),
            "--mesh", params["mesh"],
+           "--engine", params.get("engine", "3d"),
+           "--fan-duty", str(params.get("fan_duty", 1.0)),
            "--callback-port", str(port), "--cols", str(ncols),
            "--config", run_cfg_path]
+    # Mid-run field export costs real I/O, so only enable it when the host
+    # viewer sidecar has announced itself (see VIEWER_READY_FILE).
+    if os.path.exists(VIEWER_READY_FILE):
+        cmd += ["--viz-every", str(VIZ_EVERY_DEFAULT)]
     if params["fan_custom"]:
         cmd += ["--fan-cfm", str(params["fan_custom"]["max_cfm"]),
                 "--fan-mmh2o", str(params["fan_custom"]["max_mmh2o"])]
@@ -4112,7 +4188,8 @@ def launcher_main(config_path):
     threading.Thread(target=lambda: [out_tail.append(l) for l in proc.stdout],
                      daemon=True).start()
 
-    n_est = est_cells(geo, mesh_level_lc(server_cfg, params["mesh"]))
+    n_est = est_cells(geo, mesh_level_lc(server_cfg, params["mesh"]),
+                      engine=params.get("engine", "3d"))
     console.print(f"\n [dim]worker pool: "
                   f"{' '.join(cmd[:cmd.index(sys.executable)])} python3 "
                   f"chassis_cfd.py --worker ... (callback port {port})[/]")
@@ -4374,7 +4451,7 @@ def launcher_main(config_path):
         else:
             console.print(Text("all component airflow thresholds met",
                                style="green"))
-        console.print(fan_telemetry_table(fan_cfg, server_cfg["fan_count"]))
+        console.print(fan_telemetry_table(fan_cfg, server_cfg["fan_count"], summary))
         console.print(f" [dim]wall time {summary['wall_time']:.0f}s "
                       f"for {summary['sim_time']:.0f}s simulated | "
                       "VTU files: velocity.vtu / pressure.vtu / zones.vtu[/]")
@@ -4423,6 +4500,11 @@ def main():
             "mesh": _arg(argv, "--mesh", "coarse"),
             "callback_port": _arg(argv, "--callback-port"),
             "cols": _arg(argv, "--cols"),
+            # dual-engine + fan duty + mid-run viz export. worker_main
+            # coerces each of these itself, so raw strings/None are fine.
+            "engine": _arg(argv, "--engine", "3d"),
+            "fan_duty": _arg(argv, "--fan-duty"),
+            "viz_every": _arg(argv, "--viz-every"),
         }
         worker_main(args)     # config validation happens inside (rank 0)
         return
