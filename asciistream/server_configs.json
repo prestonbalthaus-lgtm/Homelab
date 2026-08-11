@@ -47,6 +47,62 @@
       "rpm": 1800,
       "max_dBA": 27.0,
       "max_wattage": 3.0
+    },
+    "dell-1u-std-40mm": {
+      "display": "Dell PowerEdge 1U Std 40mm (class est.)",
+      "max_cfm": 19.0,
+      "max_mmh2o": 65.0,
+      "rpm": 16000,
+      "max_dBA": 52.0,
+      "max_wattage": 6.0
+    },
+    "dell-1u-hp-40mm": {
+      "display": "Dell PowerEdge 1U High-Perf Gold 40mm dual-rotor (class est.)",
+      "max_cfm": 26.0,
+      "max_mmh2o": 120.0,
+      "rpm": 25000,
+      "max_dBA": 63.0,
+      "max_wattage": 18.0
+    },
+    "dell-2u-std-60mm": {
+      "display": "Dell PowerEdge 2U Std 60mm (class est.)",
+      "max_cfm": 40.0,
+      "max_mmh2o": 28.0,
+      "rpm": 12000,
+      "max_dBA": 52.0,
+      "max_wattage": 7.0
+    },
+    "dell-2u-hp-60mm": {
+      "display": "Dell PowerEdge 2U High-Perf 60mm (class est.)",
+      "max_cfm": 55.0,
+      "max_mmh2o": 45.0,
+      "rpm": 16000,
+      "max_dBA": 60.0,
+      "max_wattage": 14.4
+    },
+    "hpe-dl360g10-hp-40mm": {
+      "display": "HPE DL360 Gen10 High-Perf 40mm dual-rotor, 875284-001 class (est.)",
+      "max_cfm": 24.0,
+      "max_mmh2o": 110.0,
+      "rpm": 23000,
+      "max_dBA": 61.0,
+      "max_wattage": 16.0
+    },
+    "hpe-dl380g10-std-60mm": {
+      "display": "HPE DL380 Gen10 Std 60mm (class est.)",
+      "max_cfm": 42.0,
+      "max_mmh2o": 30.0,
+      "rpm": 12500,
+      "max_dBA": 53.0,
+      "max_wattage": 7.5
+    },
+    "hpe-dl380g10-hp-60mm": {
+      "display": "HPE DL380 Gen10 High-Perf 60mm (class est.)",
+      "max_cfm": 58.0,
+      "max_mmh2o": 48.0,
+      "rpm": 16500,
+      "max_dBA": 61.5,
+      "max_wattage": 15.0
     }
   },
   "servers": {

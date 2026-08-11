@@ -140,6 +140,15 @@
    rated): the fan curve is scaled by the Fan Affinity Laws BEFORE the
    operating-point intersection - Qmax ~ N, dPmax ~ N^2 - and the summary
    carries affinity-scaled telemetry (power ~ N^3, dBA + 50*log10(N/N0)).
+   ACOUSTIC TARGET (worker args key "dba_target", CLI --dba-target,
+   default off = byte-identical): a COMBINED free-field dBA ceiling for
+   the whole fan wall. solve_duty_for_dba inverts the same affinity +
+   10*log10(fan_count) laws into a maximum permitted duty; the QUIETER
+   of that ceiling and the explicit --fan-duty wins, and the summary
+   ADDS dba_* keys (target, duty cap, binding/achievable flags, the
+   resulting combined dBA, and an overheat flag judged against
+   requirements.outlet_temp_max_c - solved exhaust with --thermal on,
+   bulk balance estimate otherwise).
    VIZ EXPORT (worker args key "viz_every": every N steps, 0 = off,
    default off): atomic mid-run VTU snapshots in per-step directories
    plus viz_manifest.json (replaced atomically LAST) for a host-side
@@ -389,6 +398,9 @@ VIZ_EVERY_DEFAULT = 5    # steps between exports when a viewer IS attached
 # Q ~ N, dP ~ N^2, shaft power ~ N^3, dBA ~ dBA_rated + 50*log10(N/N_rated).
 # Duty is clamped to a sane PWM-style band: below 5 % a server fan stalls,
 # far above rated RPM the affinity extrapolation stops being honest.
+# solve_duty_for_dba inverts the noise law (with the +10*log10(fan_count)
+# free-field combination) into a duty ceiling for the --dba-target mode,
+# clamped into the SAME band.
 FAN_DUTY_MIN = 0.05
 FAN_DUTY_MAX = 1.5
 
@@ -490,6 +502,54 @@ DEFAULT_CONFIG = {
                           "max_cfm": 72.0, "max_mmh2o": 3.0,
                           "rpm": 1800, "max_dBA": 27.0,
                           "max_wattage": 3.0},
+        # Dell PowerEdge / HPE ProLiant OEM fan CLASSES. Every number
+        # below is a CLASS-REPRESENTATIVE engineering estimate kept
+        # consistent with the generic 40/60 mm curves above - NOT a
+        # measured vendor curve (Dell/HPE do not publish fan datasheets;
+        # see the README accuracy disclaimer). A part reference in a
+        # display string identifies which fan CLASS the profile ships
+        # with, never a verified spec for that part number. Physics of
+        # the classes: 40 mm dual-rotor 1U fans trade flow for very high
+        # static pressure and RPM; 60 mm 2U fans move more air at lower
+        # static pressure and RPM; High-Perf grades beat Std on every
+        # column within a family.
+        "dell-1u-std-40mm": {"display": "Dell PowerEdge 1U Std 40mm "
+                                        "(class est.)",
+                             "max_cfm": 19.0, "max_mmh2o": 65.0,
+                             "rpm": 16000, "max_dBA": 52.0,
+                             "max_wattage": 6.0},
+        "dell-1u-hp-40mm": {"display": "Dell PowerEdge 1U High-Perf "
+                                       "Gold 40mm dual-rotor "
+                                       "(class est.)",
+                            "max_cfm": 26.0, "max_mmh2o": 120.0,
+                            "rpm": 25000, "max_dBA": 63.0,
+                            "max_wattage": 18.0},
+        "dell-2u-std-60mm": {"display": "Dell PowerEdge 2U Std 60mm "
+                                        "(class est.)",
+                             "max_cfm": 40.0, "max_mmh2o": 28.0,
+                             "rpm": 12000, "max_dBA": 52.0,
+                             "max_wattage": 7.0},
+        "dell-2u-hp-60mm": {"display": "Dell PowerEdge 2U High-Perf "
+                                       "60mm (class est.)",
+                            "max_cfm": 55.0, "max_mmh2o": 45.0,
+                            "rpm": 16000, "max_dBA": 60.0,
+                            "max_wattage": 14.4},
+        "hpe-dl360g10-hp-40mm": {"display": "HPE DL360 Gen10 High-Perf "
+                                            "40mm dual-rotor, "
+                                            "875284-001 class (est.)",
+                                 "max_cfm": 24.0, "max_mmh2o": 110.0,
+                                 "rpm": 23000, "max_dBA": 61.0,
+                                 "max_wattage": 16.0},
+        "hpe-dl380g10-std-60mm": {"display": "HPE DL380 Gen10 Std 60mm "
+                                             "(class est.)",
+                                  "max_cfm": 42.0, "max_mmh2o": 30.0,
+                                  "rpm": 12500, "max_dBA": 53.0,
+                                  "max_wattage": 7.5},
+        "hpe-dl380g10-hp-60mm": {"display": "HPE DL380 Gen10 High-Perf "
+                                            "60mm (class est.)",
+                                 "max_cfm": 58.0, "max_mmh2o": 48.0,
+                                 "rpm": 16500, "max_dBA": 61.5,
+                                 "max_wattage": 15.0},
     },
     "servers": {
         "6029U": {
@@ -1541,6 +1601,85 @@ def fan_operating_point(server_cfg, fan_cfg, geo, duty=1.0):
     }
 
 
+def combined_noise_dba(dba_per_fan, n_fans):
+    """Combined free-field noise of n_fans equal sources: per-fan dBA +
+    10*log10(N) - the SAME engineering estimate the launcher's acoustics
+    table prints. Pure numpy - host-testable. None in, None out (unrated
+    custom fans carry no dBA)."""
+    if dba_per_fan is None:
+        return None
+    return float(dba_per_fan) + 10.0 * float(np.log10(max(int(n_fans), 1)))
+
+
+def solve_duty_for_dba(target_dba, dba_rated, n_fans,
+                       duty_min=FAN_DUTY_MIN, duty_max=FAN_DUTY_MAX):
+    """Invert the acoustic affinity law: the maximum fan duty (N/N_rated)
+    at which n_fans together stay at or under target_dba [combined
+    free-field dBA]. The EXACT algebraic inverse of the laws used
+    everywhere else in this file (single source of truth - see
+    fan_operating_point and combined_noise_dba):
+
+        per-fan   dBA(duty)  = dBA_rated + 50*log10(duty)
+        combined  dBA_total  = per-fan + 10*log10(n_fans)
+        =>  duty  = 10 ** ((target - dBA_rated - 10*log10(n_fans)) / 50)
+
+    Pure numpy - importable and host-testable with no solver stack.
+
+    Returns dict:
+      solvable        False when dba_rated is None (custom/unrated fan:
+                      the target CANNOT be solved and is not guessed at);
+                      duty_cap/duty_unclamped are then None.
+      duty_cap        permitted duty, clamped into [duty_min, duty_max].
+                      When the target is unachievable this is duty_min -
+                      the quietest the model allows - NEVER an impossible
+                      value below the stall floor.
+      duty_unclamped  the raw algebraic inverse, pre-clamp.
+      achievable      False when even duty_min is louder than the target
+                      (duty_unclamped < duty_min): the fan cannot meet
+                      this target at any permitted speed.
+      constrained     True when the target caps duty anywhere below
+                      duty_max; a target above the whole duty band
+                      imposes no constraint at all."""
+    if dba_rated is None:
+        return {"solvable": False, "duty_cap": None,
+                "duty_unclamped": None, "achievable": False,
+                "constrained": False}
+    raw = float(10.0 ** ((float(target_dba) - float(dba_rated)
+                          - 10.0 * float(np.log10(max(int(n_fans), 1))))
+                         / 50.0))
+    return {"solvable": True,
+            "duty_cap": float(min(max(raw, duty_min), duty_max)),
+            "duty_unclamped": raw,
+            "achievable": raw >= duty_min,
+            "constrained": raw < duty_max}
+
+
+def apply_dba_ceiling(requested_duty, target_dba, dba_rated, n_fans,
+                      duty_min=FAN_DUTY_MIN, duty_max=FAN_DUTY_MAX):
+    """Compose an explicit --fan-duty with a --dba-target ceiling: the
+    QUIETER of the two wins - effective duty = min(requested, duty_cap) -
+    so a noise ceiling is never silently exceeded by an explicit duty,
+    while an explicit duty already AT or UNDER the ceiling is honoured
+    unchanged. Pure numpy - host-testable.
+
+    Returns (effective_duty, info): info is the solve_duty_for_dba dict
+    plus
+      binding  True when the ceiling actually capped the requested duty
+               (duty_cap < requested); False when the explicit/default
+               duty was already at or under it.
+    For an unrated fan (solvable False) the requested duty passes through
+    untouched - the CALLER decides whether that is an error (the worker
+    refuses loudly rather than silently ignoring the target)."""
+    req = float(requested_duty)
+    info = dict(solve_duty_for_dba(target_dba, dba_rated, n_fans,
+                                   duty_min=duty_min, duty_max=duty_max))
+    if not info["solvable"]:
+        info["binding"] = False
+        return req, info
+    info["binding"] = info["duty_cap"] < req
+    return min(req, info["duty_cap"]), info
+
+
 def thermal_enabled(args):
     """Parse the worker args key "thermal" (CLI --thermal): the gate of the
     energy equation. OFF by default - a run without it is byte-identical
@@ -2093,6 +2232,32 @@ def worker_main(args):
         raise SystemExit(f"--fan-duty must be within [{FAN_DUTY_MIN:g}, "
                          f"{FAN_DUTY_MAX:g}] (fraction of rated RPM)")
 
+    # --- acoustic ceiling (worker args key "dba_target", CLI --dba-target):
+    # target COMBINED free-field dBA for the whole fan wall (all
+    # fan_count fans, +10*log10(N)). Absent/empty = off = byte-identical
+    # legacy behaviour. When set, solve_duty_for_dba inverts the affinity
+    # noise law into a duty ceiling that caps fan_duty BEFORE the
+    # operating point: the QUIETER of the ceiling and the explicit
+    # --fan-duty wins, so a noise limit is never silently exceeded.
+    dba_target_raw = args.get("dba_target")
+    dba_target = None
+    dba_info = None
+    fan_duty_requested = fan_duty
+    if dba_target_raw not in (None, ""):
+        try:
+            dba_target = float(dba_target_raw)
+        except (TypeError, ValueError):
+            raise SystemExit("--dba-target must be a number (combined "
+                             "free-field dBA for all fans)")
+        eff_duty, dba_info = apply_dba_ceiling(
+            fan_duty, dba_target, fan_cfg.get("max_dBA"),
+            server_cfg["fan_count"])
+        if not dba_info["solvable"]:
+            raise SystemExit("--dba-target needs a fan with a rated "
+                             "max_dBA - the custom fan carries none, so "
+                             "an acoustic target cannot be solved for it")
+        fan_duty = eff_duty
+
     # --- mid-run viz export cadence: every N steps, 0 = off (default: the
     # host viewer is optional and the legacy single final export stands)
     try:
@@ -2166,6 +2331,17 @@ def worker_main(args):
             print(f" [worker] fan duty {100.0 * fan_duty:g}% of rated RPM "
                   f"(affinity: Qmax x{fan_duty:g}, "
                   f"dPmax x{fan_duty ** 2:g})")
+        if dba_info is not None:
+            line = (f" [worker] dBA target {dba_target:g} dBA combined "
+                    f"({server_cfg['fan_count']} fans): duty ceiling "
+                    f"{100.0 * dba_info['duty_cap']:.1f}% of rated")
+            if dba_info["binding"]:
+                line += (f" - CAPS requested "
+                         f"{100.0 * fan_duty_requested:g}%")
+            if not dba_info["achievable"]:
+                line += (f" - UNACHIEVABLE even at minimum duty "
+                         f"({100.0 * FAN_DUTY_MIN:g}%)")
+            print(line)
         if viz_every:
             print(f" [worker] mid-run viz export every {viz_every} steps -> "
                   f"{VIZ_DIR_PREFIX}NNNNNN/ + {OUT_VIZ_MANIFEST}")
@@ -2942,6 +3118,42 @@ def worker_main(args):
             summary["t_max_c"] = float(t_max_c)
             summary["heat_load_w"] = float(plan["total_w"])
             summary["q_src_w"] = float(q_injected)
+        if dba_info is not None:
+            # ADDED keys (present only when --dba-target is set, so the
+            # frozen default wire stays byte-identical). dba_combined is
+            # the SAME free-field estimate the acoustics table prints:
+            # per-fan dBA at the EFFECTIVE duty + 10*log10(fan_count).
+            combined = combined_noise_dba(fan_op["dba"],
+                                          server_cfg["fan_count"])
+            summary["dba_target"] = float(dba_target)
+            summary["dba_target_duty_cap"] = dba_info["duty_cap"]
+            summary["fan_duty_requested"] = float(fan_duty_requested)
+            summary["dba_target_binding"] = bool(dba_info["binding"])
+            summary["dba_target_achievable"] = bool(
+                dba_info["achievable"])
+            summary["dba_combined"] = combined
+            summary["dba_target_met"] = bool(
+                combined is not None
+                and combined <= float(dba_target) + 1e-9)
+            # noise-limit / thermal interaction: does holding the fans to
+            # the acoustic ceiling overheat the exhaust? Judged against
+            # requirements.outlet_temp_max_c using the SOLVED outlet mean
+            # when the energy equation ran, else the bulk balance
+            # estimate over the computed flow (basis says which, so the
+            # launcher can phrase the warning honestly).
+            t_limit = float((server_cfg.get("requirements") or {})
+                            .get("outlet_temp_max_c", 35.0))
+            if thermal:
+                t_check, basis = float(t_exhaust_c), "solved"
+            else:
+                t_check = float(
+                    t_inlet + float(server_cfg.get("heat_load", 0.0))
+                    / (RHO_AIR * max(qo, 1e-9) * CP_AIR))
+                basis = "bulk"
+            summary["outlet_temp_max_c"] = t_limit
+            summary["dba_exhaust_c"] = t_check
+            summary["dba_exhaust_basis"] = basis
+            summary["dba_overheat"] = bool(t_check > t_limit)
         send(summary)
         print(f" [worker] done: t={sim_time:.1f}s in "
               f"{summary['wall_time']:.0f}s wall, q_out={qo:.4f} m^3/s "
