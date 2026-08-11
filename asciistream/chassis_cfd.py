@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ================================================================================
- ASCIISTREAM v0.8 - terminal CFD for server chassis (launcher/worker + TUI)
+ ASCIISTREAM v0.9.1 - terminal CFD for server chassis (launcher/worker + TUI)
  parametric gmsh meshing from server_configs.json + FEniCSx/dolfinx transient
  incremental pressure-correction (Chorin/IPCS family) + MPI worker pool +
  socket-streamed live ASCII particle dashboard and a CAD-style isometric
@@ -4354,7 +4354,7 @@ def launcher_wizard(console, cfg, config_path):
     console.clear()
     render_banner(console)
     console.print(Panel.fit(
-        "[bold cyan]ASCIISTREAM[/]  [dim]v0.8 - terminal CFD for server "
+        "[bold cyan]ASCIISTREAM[/]  [dim]v0.9.1 - terminal CFD for server "
         "chassis[/]\n"
         "[white]Transient Navier-Stokes (incremental pressure-correction) on "
         "MPI workers[/]\n"
