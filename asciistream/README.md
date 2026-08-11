@@ -14,6 +14,84 @@ Docker.
 ./run.sh
 ```
 
+---
+
+## What's new in this update
+
+A large round: three geometry/solver bug fixes plus four new capabilities.
+Everything below is additive — existing runs behave exactly as before
+unless you opt into the new modes.
+
+**Bug fixes**
+
+- **Dell C4130 could not be modelled with any PCIe card fitted.** Adding a
+  card raised `ValueError: riser 'riser_left' overlaps 'pcie_card_1'`, and
+  behind it a second `porous zone 'gpu_1' overlaps solid 'pcie_card_1'`.
+  Root cause: card x-placement was hardcoded to span the full chassis
+  width, so it collided with anything else in the rear. Cards now honour an
+  optional per-profile `pcie_x_band`, C4130's risers moved to the chassis
+  sides, and its four GPUs moved out of the rear PCIe slots into the
+  **front compute bay** (z = 0.105–0.215 m) where they belong.
+- **A diskless server could not be selected.** The geometry layer has
+  always supported `drive_bay_count: 0`; only the wizard's drive prompt
+  blocked it (`choices=["1","2"]`). It now offers **[0] No drives**.
+- **Dell R640 PSUs were 74 mm stubs.** They are now full-depth 0.25 m
+  blocks extending forward from the rear plane, narrowed to 62 mm so they
+  flank the riser cage the way a real R640 does — and each one now drives a
+  **solved 40 mm internal fan momentum source** (≈118 Pa over 0.25 m)
+  rather than being a drawn annotation. Opt-in per zone via
+  `fan_momentum: true`, so every other profile is untouched.
+
+**New**
+
+- **Acoustic / dBA target mode** — see below. The homelab question:
+  *will this box cook itself if I hold it to 45 dBA?*
+- **Variable PCIe card count** — the wizard asks how many cards are
+  installed (capped by the profile's `pcie_max_slots`) instead of a binary
+  GPU/NIC toggle, then how many of those are GPUs for the heat load.
+- **Seven enterprise fan profiles** (Dell PowerEdge 1U/2U, HPE ProLiant
+  DL360/DL380 Gen10) — **class-representative estimates, not vendor data**;
+  see the note under *Fans*.
+- **Fluid streamtubes** in the 3-D viewers — smooth, seeded by local air
+  speed, clipped strictly to the fluid domain.
+
+## Acoustic / dBA target mode
+
+Homelab servers usually live somewhere you can hear them. Give the wizard a
+noise ceiling — or pass `--dba-target 45` — and the solver inverts the same
+acoustic law the telemetry table already uses
+(`dBA = dBA_rated + 50·log₁₀(duty)`, combined across N fans as
+`+10·log₁₀(N)`) to find the highest fan duty that stays under your limit,
+clamps the fan curve to it, and then tells you whether the airflow you have
+left is still enough.
+
+Measured on a Supermicro 6029U with 4× FAN-0118L4 (60.5 dBA rated, so
+66.5 dBA at full tilt):
+
+| Ceiling | Permitted duty | Fan operating estimate | Solved q_out |
+|---|---|---|---|
+| none | 100 % | 129.0 CFM | 74.5 CFM |
+| 65 dBA (rack room) | 93.2 % | 120.3 CFM | 69.4 CFM |
+| 45 dBA (living room) | **37.1 %** | 47.9 CFM | **27.6 CFM** |
+
+At 45 dBA that chassis no longer holds its exhaust ceiling, and the run
+report says so outright:
+
+```
+[THERMAL WARNING: 45 dBA noise limit starves the chassis] exhaust 36.9 degC
+exceeds the 35.0 degC ceiling (solved energy equation). Raise the dBA limit,
+cut the heat load, or accept throttling.
+```
+
+Combine it with `--thermal on` for a hot-spot-aware answer; without the
+energy equation the verdict falls back to the bulk balance and says so.
+
+**Two honest limits.** The 50·log₁₀ law has **no noise floor**, so the model
+will happily "meet" a 30 dBA target at a duty a real fan cannot reach —
+treat very low ceilings as optimistic. And fans with no rated dBA
+(including custom fans) cannot be solved for at all; the mode is skipped
+with a reason rather than guessing.
+
 ## Features
 
 - **Live ASCII dashboard** — 2-D mid-plane streaklines (`.` stagnant → `~`
@@ -260,6 +338,7 @@ coarse; a number is a literal element size in millimetres, e.g.
 | `--fan-duty F` | `1.0` | Fraction of rated RPM. Fan Affinity Laws applied before the operating point: flow ∝ N, pressure ∝ N², shaft power ∝ N³, dBA ≈ +50·log₁₀(N/N_rated). |
 | `--thermal on\|off` | `off` | Solve the energy equation (see **Physics**). Off is byte-identical to the pre-thermal solver. |
 | `--viz-every N` | `0` (off) | Export a field snapshot every N steps for the host viewer. The launcher sets this automatically when the viewer sidecar is attached. |
+| `--dba-target D` | none | Acoustic ceiling: combined free-field dBA for the whole fan wall. Caps fan duty to the loudest setting that stays under it (the quieter of this and `--fan-duty` wins). Unavailable for fans with no rated dBA. |
 
 ## Configuration — `server_configs.json`
 
@@ -295,6 +374,23 @@ Configuration* appends new profiles; the hardware prompts never touch it.
 | `generic-40mm-dual` | 40×56 mm dual-rotor (1U/switch class) | 22 CFM | 90.0 mmH₂O |
 | `generic-60mm` | 60×38 mm high-static (router class) | 38 CFM | 30.0 mmH₂O |
 | `generic-120mm` | 120×25 mm case fan (ATX class) | 72 CFM | 3.0 mmH₂O |
+| `dell-1u-std-40mm` | Dell PowerEdge 1U standard 40 mm *(est.)* | 19 CFM | 65.0 mmH₂O |
+| `dell-1u-hp-40mm` | Dell PowerEdge 1U high-perf 40 mm dual-rotor *(est.)* | 26 CFM | 120.0 mmH₂O |
+| `dell-2u-std-60mm` | Dell PowerEdge 2U standard 60 mm *(est.)* | 40 CFM | 28.0 mmH₂O |
+| `dell-2u-hp-60mm` | Dell PowerEdge 2U high-perf 60 mm *(est.)* | 55 CFM | 45.0 mmH₂O |
+| `hpe-dl360g10-hp-40mm` | HPE DL360 Gen10 high-perf (875284-001 class) *(est.)* | 24 CFM | 110.0 mmH₂O |
+| `hpe-dl380g10-std-60mm` | HPE DL380 Gen10 standard module *(est.)* | 42 CFM | 30.0 mmH₂O |
+| `hpe-dl380g10-hp-60mm` | HPE DL380 Gen10 high-perf module *(est.)* | 58 CFM | 48.0 mmH₂O |
+
+**The seven entries marked *(est.)* are class-representative engineering
+estimates, NOT vendor data.** Dell and HPE do not publish curves for these
+OEM fans, and none of these numbers were sourced from a datasheet — the
+part reference identifies which *class* the entry models, not a verified
+spec. They are internally consistent with each other and with the physics
+(40 mm dual-rotor: high static pressure, low flow, high RPM; 60 mm: more
+flow, less static), and are fine for comparing configurations — but do not
+size a real machine from them. The same caveat has always applied to the
+`generic-*` entries.
 
 The fan curve (quadratic, `P = Pmax·(1−(Q/Qmax)²)`, `fan_count` in parallel)
 is intersected with a ζ-based impedance *estimate* only to set the inlet
