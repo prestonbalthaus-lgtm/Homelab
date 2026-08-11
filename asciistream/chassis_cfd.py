@@ -3305,9 +3305,11 @@ def write_report(server_cfg, params, fan_cfg, summary, comp_rows, fails,
     rc.print(f"engine   : {line}")
     if eng == "2d":
         rc.print("           NOTE: the planar engine models no floor/"
-                 "ceiling friction and therefore")
-        rc.print("           OVER-predicts through-flow - use 3-D "
-                 "volumetric for quantitative work.")
+                 "ceiling friction, so it over-predicts")
+        rc.print("           through-flow - measured at +5 % vs 3-D near "
+                 "steady state on 6029U/coarse,")
+        rc.print("           and by more during the early transient. "
+                 "Confirm in 3-D before relying on it.")
     hw = params.get("hw") or {}
     bits = []
     if hw.get("drive_type"):
@@ -3640,10 +3642,11 @@ def launcher_wizard(console, cfg, config_path):
     # walkthrough of it) stays intact.
     console.print("\n [bold]Solver engine[/] - [cyan]3d[/] volumetric is the "
                   "full-fidelity solve; [cyan]2d[/] planar solves only the\n"
-                  " mid-height slice: ~10x fewer cells and far quicker, but "
-                  "it models no floor/ceiling\n friction and so "
-                  "OVER-predicts through-flow. Use 2d to explore, 3d to "
-                  "conclude.")
+                  " mid-height slice: ~13x fewer cells, ~26x quicker. It "
+                  "models no floor/ceiling friction,\n so it over-predicts "
+                  "through-flow - measured at +5% near steady state on "
+                  "6029U/coarse,\n but more during the early transient. "
+                  "Explore in 2d, confirm in 3d.")
     engine = Prompt.ask("  Engine", choices=["3d", "2d"], default="3d",
                         console=console)
     fan_duty = FloatPrompt.ask(
