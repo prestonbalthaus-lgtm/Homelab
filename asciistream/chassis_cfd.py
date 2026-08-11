@@ -306,6 +306,25 @@ GPU_SHELL_M = 0.01   # SOLID PCIe cards are cut OUT of the fluid domain, so
                      # card - the same 1 cm shell the GPU airflow telemetry
                      # proxy samples (worker args key "thermal")
 
+# --- PSU internal fan momentum source (zone keys fan_rpm + fan_momentum) ------
+# A POROUS custom zone flagged "fan_momentum": true is driven by its own
+# fan (R640-style PSUs): the worker adds a uniform +z body force
+# f = dp_fan / L_z [N/m^3] over the zone's cells. dp_fan comes from the
+# fan scaling laws: dp = PSI * rho * u_tip^2 with u_tip = pi*D*(rpm/60).
+# PSI = 0.10 is a documented engineering estimate for small high-static
+# axial fans (a 40 mm / 15 krpm unit lands at ~118 Pa - the range of
+# published 40x40x28 server PSU fan curves). Zones WITHOUT the flag are
+# untouched (fan_rpm alone stays a drawn annotation), so every legacy
+# profile solves bit-identically.
+PSU_FAN_PRESSURE_COEFF = 0.10
+
+# --- PCIe card band -----------------------------------------------------------
+PCIE_CARD_MIN_W = 0.005  # narrowest meshable PCIe card [m]: a pcie_x_band
+                         # squeezing the requested cards below 5 mm each is
+                         # a config error, not a sliver mesh
+PCIE_MAX_SLOTS_DEFAULT = 8   # historical clamp on the populated card count
+                             # (profile key pcie_max_slots overrides)
+
 # --- Transient scheme ---------------------------------------------------------
 SIM_DT      = 0.1    # default time step [s]; tunable in the TUI / --dt
 SIM_DT_MIN  = 0.001  # TUI clamp: below this the run length explodes
@@ -1004,7 +1023,15 @@ def apply_hw_overrides(s, hw):
 
     hw keys (all optional): drive_type ('2.5in NVMe/SAS' | '3.5in HDD'),
     heat_load_w, inlet_temp_c, exhaust_temp_c, gpu_count + gpu_watts,
-    nic (bool). GPU/NIC need the profile's pcie_zone_z to mesh cards."""
+    nic (bool), pcie_card_count (int >= 0). GPU/NIC/card-count need the
+    profile's pcie_zone_z to mesh cards.
+
+    pcie_card_count is the wizard's EXPLICIT population answer: when
+    present it OWNS populated_pcie_slots (clamped to the profile's
+    pcie_max_slots, default 8 - cards only spawn into slots that exist),
+    superseding the GPU+NIC derivation below. GPU wattage still folds
+    into heat_load from gpu_count/gpu_watts regardless. Absent = the
+    legacy behaviour, bit for bit."""
     dt = hw.get("drive_type")
     if dt and s.get("drive_zone_z") and int(s.get("drive_bay_count", 0)) > 0:
         s["drive_zeta"] = float(s["drive_zeta"]) * DRIVE_TYPE_ZETA[dt]
@@ -1016,6 +1043,7 @@ def apply_hw_overrides(s, hw):
         reqs["inlet_temp_c"] = float(hw["inlet_temp_c"])
     if hw.get("exhaust_temp_c") is not None:
         reqs["outlet_temp_max_c"] = float(hw["exhaust_temp_c"])
+    max_slots = int(s.get("pcie_max_slots", PCIE_MAX_SLOTS_DEFAULT))
     if s.get("pcie_zone_z") and ("nic" in hw or "gpu_count" in hw):
         # Once the wizard has asked, its answers OWN the PCIe population -
         # a card exists only because the user fitted a GPU or a NIC, so the
@@ -1029,7 +1057,8 @@ def apply_hw_overrides(s, hw):
         # so its presence marks "the user was actually asked". Scripted
         # --worker runs never reach here and keep their JSON defaults.)
         n_gpu = int(hw.get("gpu_count") or 0)
-        s["populated_pcie_slots"] = min(n_gpu + (1 if hw.get("nic") else 0), 8)
+        s["populated_pcie_slots"] = min(n_gpu + (1 if hw.get("nic") else 0),
+                                        max_slots)
         s["nic_slot"] = bool(hw.get("nic"))
         if n_gpu > 0:
             gpu_w = n_gpu * float(hw.get("gpu_watts") or 0.0)
@@ -1039,6 +1068,14 @@ def apply_hw_overrides(s, hw):
             # washing shells (thermal_heat_plan) - the cards are solids
             # with no interior cells to source into
             s["gpu_heat_w"] = gpu_w
+    if s.get("pcie_zone_z") and hw.get("pcie_card_count") is not None:
+        # explicit population from the wizard's card-count prompt: this
+        # answer OWNS the slot count (applied AFTER the GPU/NIC block so
+        # it supersedes the derived count when both are supplied)
+        n_cards = int(hw["pcie_card_count"])
+        if n_cards < 0:
+            raise ValueError("pcie_card_count must be >= 0")
+        s["populated_pcie_slots"] = min(n_cards, max_slots)
     return s
 
 
@@ -1074,6 +1111,17 @@ SURF_FRONT, SURF_FAN, SURF_OUTLET, SURF_WALLS = 11, 12, 13, 14
 GEOM_TOL = 1e-7
 
 
+def psu_fan_dp(rpm, size_mm):
+    """Static pressure estimate [Pa] for a zone's internal axial fan (the
+    momentum-source strength of "fan_momentum" zones). Fan scaling laws:
+    dp = PSI * rho * u_tip^2, u_tip = pi * D * (rpm/60). PSI is the
+    documented PSU_FAN_PRESSURE_COEFF engineering estimate. Pure numpy -
+    host-testable, and the single source of this math for the worker,
+    build_geometry and the tests."""
+    tip = np.pi * (float(size_mm) / 1000.0) * (float(rpm) / 60.0)
+    return PSU_FAN_PRESSURE_COEFF * RHO_AIR * tip ** 2
+
+
 def build_geometry(server_cfg):
     """Turn the config numbers into concrete boxes.
 
@@ -1091,8 +1139,23 @@ def build_geometry(server_cfg):
       - RAM banks: sockets+1 solid banks in the gaps left/between/right of
         the sinks; width ~9 mm per DIMM slot (slots split evenly across
         banks), clamped to 80 % of the local gap; y 6 %..55 % of H.
-      - PCIe: populated_pcie_slots solid cards spread across the width of
-        pcie_zone_z with 20 mm margins/gaps; y 12 %..82 % of H.
+      - PCIe: populated_pcie_slots solid cards spread across the CARD BAND
+        of pcie_zone_z with 20 mm gaps; y 12 %..82 % of H. The band is
+        the optional profile key "pcie_x_band": [x0, x1] in METRES -
+        cards are laid out inside it edge to edge. Absent = the legacy
+        full-width band [0.02, W - 0.02], bit-identical for every profile
+        that does not set it. Use it to keep the runtime-generated cards
+        clear of hardware that flanks the PCIe zone: PSUs beside the
+        riser cage (R640), mid-width PSU banks (C4130). Validated: the
+        band must satisfy 0 <= x0 < x1 <= W, and it must be wide enough
+        that every requested card keeps >= PCIE_CARD_MIN_W (5 mm) of
+        width - else a clear ValueError. Related optional profile key
+        "pcie_max_slots" (default 8): the clamp apply_hw_overrides puts
+        on the RUNTIME card population (wizard GPU/NIC answers and the
+        explicit pcie_card_count) - cards only spawn into slots that
+        physically exist. build_geometry itself does not clamp: a JSON
+        that hardcodes more populated_pcie_slots than fit its band dies
+        in the band-width validation above.
       - pcie_risers: STATIC riser cages at pcie_zone_z that persist when
         the cards are gone - populated_pcie_slots 0 still meshes them
         (the riser is chassis mechanics, not a plug-in card). A list of
@@ -1118,8 +1181,18 @@ def build_geometry(server_cfg):
         Optional "label" (canvas text) and "telemetry" ("cpu"/"gpu"/
         "optics") hook a zone into the thermal threshold checks; optional
         "fan_rpm" + "fan_size_mm" mark the zone as carrying its own fan
-        (PSUs) - drawn as the gold fan marker, not solved as a momentum
-        source. Optional "heat_w" (POROUS zones only, >= 0) pins that many
+        (PSUs) - drawn as the gold fan marker. By itself that stays an
+        ANNOTATION (legacy profiles solve bit-identically); adding
+        "fan_momentum": true to a POROUS fan zone makes the worker solve
+        it as a real momentum source: a uniform +z body force
+        f = dp / L_z [N/m^3] over the zone's cells, dp from psu_fan_dp()
+        (fan scaling laws on fan_rpm/fan_size_mm - see
+        PSU_FAN_PRESSURE_COEFF). The zone dict then carries "fan_dp_pa" /
+        "fan_force" (plus fan_rpm/fan_size_mm) for the worker and the
+        summary. fan_momentum requires fan_rpm, and on a SOLID zone it is
+        rejected - solids are cut out of the fluid domain, so there are
+        no cells to push on. Optional "heat_w" (POROUS zones only, >= 0)
+        pins that many
         watts of the profile heat_load onto the zone as a volumetric
         source when the energy equation runs (thermal_heat_plan); a solid
         zone cannot carry it - solids are cut out of the fluid domain, so
@@ -1187,12 +1260,39 @@ def build_geometry(server_cfg):
                             xc + gw / 2, 0.55 * H, float(cz1))))
 
     n_pcie = int(server_cfg.get("populated_pcie_slots", 0))
+    band = server_cfg.get("pcie_x_band")
+    if band is not None:
+        # validated even with 0 cards: a typo'd band must die at config
+        # time, not on the first wizard run that populates a slot
+        try:
+            bx0, bx1 = (float(v) for v in band)
+        except (TypeError, ValueError):
+            raise ValueError('pcie_x_band must be "pcie_x_band": [x0, x1] '
+                             "in metres")
+        if not (-1e-9 <= bx0 < bx1 <= W + 1e-9):
+            raise ValueError(
+                f"pcie_x_band [{bx0:g}, {bx1:g}] must satisfy "
+                f"0 <= x0 < x1 <= chassis width ({W:g})")
+    else:
+        bx0, bx1 = 0.02, W - 0.02      # legacy full-width card band
     if n_pcie > 0:
         pz0, pz1 = server_cfg["pcie_zone_z"]
-        side, gap = 0.02, 0.02
-        card_w = (W - 2 * side - (n_pcie - 1) * gap) / n_pcie
+        gap = 0.02
+        # band absent: the ORIGINAL full-width expression, kept verbatim so
+        # legacy card coordinates stay BIT-identical (float associativity -
+        # (W-0.02)-0.02 != W-2*0.02 in the last ulp, and the meshed cell
+        # count is a pinned regression gate)
+        card_w = ((W - 2 * 0.02 - (n_pcie - 1) * gap) / n_pcie
+                  if band is None
+                  else ((bx1 - bx0) - (n_pcie - 1) * gap) / n_pcie)
+        if card_w < PCIE_CARD_MIN_W:
+            raise ValueError(
+                f"pcie_x_band [{bx0:g}, {bx1:g}] is too narrow for "
+                f"{n_pcie} card(s): each card would be {card_w * 1000:.1f} "
+                f"mm wide (minimum {PCIE_CARD_MIN_W * 1000:g} mm) - widen "
+                "the band or populate fewer slots")
         for i in range(n_pcie):
-            x0 = side + i * (card_w + gap)
+            x0 = bx0 + i * (card_w + gap)
             solids.append((f"pcie_card_{i+1}",
                            (x0, 0.12 * H, float(pz0),
                             x0 + card_w, 0.82 * H, float(pz1))))
@@ -1261,14 +1361,34 @@ def build_geometry(server_cfg):
             if "zeta" not in zone or "permeability" not in zone:
                 raise ValueError(f"porous zone '{name}' needs zeta and "
                                  "permeability")
-            extra_porous.append({
+            zd = {
                 "name": name, "box": b, "zeta": float(zone["zeta"]),
                 "C2": float(zone["zeta"]) / max(b[5] - b[2], 1e-9),
                 "K": float(zone["permeability"]),
                 "tag": VOL_EXTRA0 + len(extra_porous),
                 "telemetry": telem,
-                "heat_w": float(heat_w) if heat_w is not None else None})
+                "heat_w": float(heat_w) if heat_w is not None else None}
+            if zone.get("fan_momentum"):
+                # solved momentum source (see docstring): keys added ONLY
+                # on flagged zones, so unflagged profiles' geometry dicts
+                # (and their solves) stay byte-identical
+                if not zone.get("fan_rpm"):
+                    raise ValueError(f"custom zone '{name}': fan_momentum "
+                                     "requires fan_rpm (and optionally "
+                                     "fan_size_mm)")
+                rpm = int(zone["fan_rpm"])
+                size = int(zone.get("fan_size_mm", 40))
+                dp = float(psu_fan_dp(rpm, size))
+                zd.update(fan_rpm=rpm, fan_size_mm=size, fan_dp_pa=dp,
+                          fan_force=dp / max(b[5] - b[2], 1e-9))
+            extra_porous.append(zd)
         elif kind == "solid":
+            if zone.get("fan_momentum"):
+                raise ValueError(
+                    f"custom zone '{name}': fan_momentum is only supported "
+                    "on porous zones - a solid is CUT OUT of the fluid "
+                    "domain, so there are no cells for the body force to "
+                    "act on (declare the zone porous like the R640 PSUs)")
             if heat_w is not None:
                 raise ValueError(
                     f"custom zone '{name}': heat_w is only supported on "
@@ -2097,6 +2217,37 @@ def worker_main(args):
     L1 = ((rho_c / dt_c) * ufl.dot(u_n, v) * dx
           - ufl.dot(ufl.grad(p_n), v) * dx)
 
+    # PSU internal-fan momentum sources ("fan_momentum" porous zones, e.g.
+    # the R640's 40 mm high-static PSU fans): a uniform +z body force
+    # f = dp_fan / L_z [N/m^3] over the zone's cells - a streamline through
+    # the whole zone picks up the full fan pressure rise dp_fan (the
+    # standard fan-zone momentum-source model; dp_fan precomputed by
+    # build_geometry via psu_fan_dp). Stable at the default dt = 0.1 s
+    # because (1) the force is a bounded CONSTANT on the RHS, (2) the
+    # zone's own quadratic porous drag sits IMPLICITLY in a1 (lagged |u_n|,
+    # drag time scale 2/(C2|u|) ~ ms << dt), so drag equilibrates the force
+    # within a step instead of feeding back, and (3) psu_ramp_c ramps the
+    # force over RAMP_STEPS in lockstep with the fan-wall BC - no impulsive
+    # start. Zones without the flag carry no term: every other profile's
+    # solve is byte-identical.
+    psu_ramp_c = fem.Constant(msh, default_scalar_type(0.0))
+    psu_fan_srcs = []
+    for z in geo["extra_porous"]:
+        if not z.get("fan_force"):
+            continue
+        if two_d and not _midplane_hit(z["box"], H):
+            continue              # zone absent from the mid-height plane
+        f_vec = (ufl.as_vector((0.0, z["fan_force"])) if two_d
+                 else ufl.as_vector((0.0, 0.0, z["fan_force"])))
+        L1 += psu_ramp_c * ufl.dot(f_vec, v) * dx(z["tag"])
+        psu_fan_srcs.append(z)
+    if rank == 0:
+        for z in psu_fan_srcs:
+            print(f" [worker] PSU fan momentum source: {z['name']} "
+                  f"{z['fan_rpm']} rpm / {z['fan_size_mm']} mm -> "
+                  f"{z['fan_dp_pa']:.0f} Pa over "
+                  f"{z['box'][5] - z['box'][2]:.3f} m (+z)")
+
     # step 2: pressure increment; phi = 0 on the OPEN boundaries only (front
     # + outlet: each mesh component's pressure anchor); natural Neumann on
     # walls AND the fan plane (velocity-Dirichlet boundary)
@@ -2530,6 +2681,7 @@ def worker_main(args):
         scale = min(1.0, (step + 1) / RAMP_STEPS)   # fan startup ramp
         u_fan.x.array[:] = fan_base * scale
         u_fan.x.scatter_forward()
+        psu_ramp_c.value = scale      # PSU fan sources ramp with the wall
 
         A1.zeroEntries()
         fp.assemble_matrix(A1, a1f, bcs=bcs_u)
@@ -2763,6 +2915,14 @@ def worker_main(args):
             "sim_time": sim_time, "dt": dt,
             "wall_time": time.time() - t_wall,
         }
+        if psu_fan_srcs:
+            # ADDED summary key (frozen wire protocol allows additions):
+            # present only when momentum-source zones actually solved, so
+            # every unflagged profile's summary stays byte-identical
+            summary["psu_fan_sources"] = [
+                {"name": z["name"], "rpm": z["fan_rpm"],
+                 "size_mm": z["fan_size_mm"],
+                 "dp_pa": round(z["fan_dp_pa"], 1)} for z in psu_fan_srcs]
         if thermal:
             # ADDED keys (never present with thermal off, so the frozen
             # off-wire stays byte-identical): the SOLVED exhaust
