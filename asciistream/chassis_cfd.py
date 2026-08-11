@@ -4172,7 +4172,67 @@ def fan_telemetry_table(fan_cfg, n_fans, summary=None):
     tbl.add_row("Total fan power draw",
                 f"{watts * n_fans:.1f} W ({watts:.1f} W x {n_fans})"
                 if watts else "n/a")
+
+    # --- acoustic ceiling (present only when a target was set) ---------
+    s = summary or {}
+    if s.get("dba_target") is not None:
+        tgt = float(s["dba_target"])
+        tbl.add_row("Noise ceiling requested", f"{tgt:g} dBA")
+        cap_duty = s.get("dba_target_duty_cap")
+        if cap_duty is not None:
+            tbl.add_row("Max duty permitted by the ceiling",
+                        f"{float(cap_duty) * 100:.0f} % of rated RPM")
+        combined = s.get("dba_combined")
+        if combined is not None:
+            met = s.get("dba_target_met")
+            tbl.add_row("Combined noise at the solved duty",
+                        f"{float(combined):.1f} dBA "
+                        + ("[green]within target[/]" if met
+                           else "[bold red]OVER target[/]"))
+        if s.get("dba_target_binding"):
+            req = s.get("fan_duty_requested")
+            tbl.add_row("Ceiling binding?",
+                        "[yellow]yes - capped from "
+                        f"{float(req) * 100:.0f} %[/]" if req is not None
+                        else "[yellow]yes[/]")
+        elif s.get("dba_target_achievable") is False:
+            tbl.add_row("Ceiling binding?",
+                        "[bold red]unreachable even at the duty floor[/]")
+        else:
+            tbl.add_row("Ceiling binding?", "no - fans stayed below it")
     return tbl
+
+
+def dba_thermal_banner(summary):
+    """The homelab verdict: did holding the noise limit cook the box?
+
+    Returns a rich renderable, or None when no acoustic target was set.
+    `dba_exhaust_basis` records whether the exhaust figure came from the
+    solved energy equation ("solved") or the bulk balance ("bulk") - the
+    warning says which, because a bulk estimate cannot see a hot spot."""
+    s = summary or {}
+    if s.get("dba_target") is None:
+        return None
+    t_out = s.get("dba_exhaust_c")
+    t_max = s.get("outlet_temp_max_c")
+    if t_out is None or t_max is None:
+        return None
+    basis = s.get("dba_exhaust_basis", "bulk")
+    basis_txt = ("solved energy equation" if basis == "solved"
+                 else "bulk balance - run with the energy equation for a "
+                      "hot-spot-aware answer")
+    if s.get("dba_overheat"):
+        return Text(
+            f"[THERMAL WARNING: {float(s['dba_target']):g} dBA noise limit "
+            f"starves the chassis] exhaust {float(t_out):.1f} degC exceeds "
+            f"the {float(t_max):.1f} degC ceiling ({basis_txt}). Raise the "
+            "dBA limit, cut the heat load, or accept throttling.",
+            style="bold red")
+    return Text(
+        f"noise limit {float(s['dba_target']):g} dBA holds without "
+        f"overheating: exhaust {float(t_out):.1f} degC vs the "
+        f"{float(t_max):.1f} degC ceiling ({basis_txt})",
+        style="green")
 
 
 def write_report(server_cfg, params, fan_cfg, summary, comp_rows, fails,
@@ -4233,6 +4293,9 @@ def write_report(server_cfg, params, fan_cfg, summary, comp_rows, fails,
     else:
         rc.print("no thermal warnings - all component airflow thresholds met")
     rc.print(fan_telemetry_table(fan_cfg, server_cfg["fan_count"], summary))
+    _dba_banner = dba_thermal_banner(summary)
+    if _dba_banner is not None:
+        rc.print(_dba_banner)
     rc.print()
     rc.print(build_main_panel(scene))
     rc.print(build_legend())
@@ -4591,9 +4654,60 @@ def launcher_wizard(console, cfg, config_path):
     thermal = Confirm.ask(
         "  Solve the energy equation (real air temperature rise)?",
         default=False, console=console)
+
+    # --- acoustic ceiling (the homelab question) -----------------------
+    # Enter = unconstrained. A ceiling caps the fan duty via the same
+    # affinity/noise laws the telemetry table uses, so the answer to "will
+    # it cook itself at 45 dBA?" comes out of the same physics.
+    dba_target = None
+    fan_dba = (cfg["fans"].get(fan) or {}).get("max_dBA") if not fan_custom \
+        else None
+    if fan_dba:
+        quietest = combined_noise_dba(
+            fan_dba + 50.0 * np.log10(FAN_DUTY_MIN), s["fan_count"])
+        loudest = combined_noise_dba(fan_dba, s["fan_count"])
+        console.print(f"\n  [bold]Noise ceiling[/] - this fan wall runs at "
+                      f"[cyan]{loudest:.0f} dBA[/] at full duty "
+                      f"(~{quietest:.0f} dBA at the {FAN_DUTY_MIN:g} duty "
+                      "floor).\n  Typical limits: 45 dBA living room, "
+                      "55 dBA office, 65 dBA rack room.")
+        raw = Prompt.ask("  Set target noise limit in dBA (Enter = max "
+                         "performance)", default="", console=console)
+        raw = str(raw).strip()
+        if raw:
+            try:
+                dba_target = float(raw)
+            except ValueError:
+                console.print("    [yellow]not a number - ignoring the "
+                              "noise limit[/]")
+                dba_target = None
+    elif not fan_custom:
+        console.print("\n  [dim]this fan has no rated dBA - noise-target "
+                      "mode unavailable[/]")
+    else:
+        console.print("\n  [dim]custom fan has no rated dBA - noise-target "
+                      "mode unavailable[/]")
+
+    if dba_target is not None:
+        sol = solve_duty_for_dba(dba_target, fan_dba, s["fan_count"])
+        if not sol["achievable"]:
+            console.print(f"    [yellow]{dba_target:g} dBA is below what "
+                          f"these fans can reach even at the "
+                          f"{FAN_DUTY_MIN:g} duty floor - the solve will "
+                          "run at that floor and report the shortfall[/]")
+        elif sol["constrained"]:
+            console.print(f"    [dim]caps fan duty at "
+                          f"{sol['duty_cap'] * 100:.0f} % of rated RPM[/]")
+        else:
+            console.print("    [dim]above this fan wall's full-duty output "
+                          "- not a binding constraint[/]")
+
     summary.add_row("Solver engine",
                     "3-D volumetric" if engine == "3d" else "2-D planar")
     summary.add_row("Fan duty", f"{fan_duty * 100:.0f} % of rated RPM")
+    summary.add_row("Noise ceiling",
+                    f"{dba_target:g} dBA target" if dba_target is not None
+                    else "none (max performance)")
     summary.add_row("Energy equation",
                     f"on - {s['heat_load']:.0f} W over the heat sources, "
                     f"intake {s['requirements']['inlet_temp_c']:.0f} degC"
@@ -4608,7 +4722,7 @@ def launcher_wizard(console, cfg, config_path):
             "fan": fan, "fan_custom": fan_custom,
             "cores": cores, "sim_time": sim_time, "dt": dt,
             "mesh": mesh_arg, "engine": engine, "fan_duty": fan_duty,
-            "thermal": thermal}
+            "thermal": thermal, "dba_target": dba_target}
 
 
 def detect_mpi_flags():
@@ -4673,6 +4787,8 @@ def launcher_main(config_path):
            "--engine", params.get("engine", "3d"),
            "--fan-duty", str(params.get("fan_duty", 1.0)),
            "--thermal", "on" if params.get("thermal") else "off",
+           *(["--dba-target", str(params["dba_target"])]
+             if params.get("dba_target") is not None else []),
            "--callback-port", str(port), "--cols", str(ncols),
            "--config", run_cfg_path]
     # Mid-run field export costs real I/O, so only enable it when the host
@@ -4914,6 +5030,9 @@ def launcher_main(config_path):
             console.print(Text("all component airflow thresholds met",
                                style="green"))
         console.print(fan_telemetry_table(fan_cfg, server_cfg["fan_count"], summary))
+        dba_banner = dba_thermal_banner(summary)
+        if dba_banner is not None:
+            console.print(dba_banner)
         console.print(f" [dim]wall time {summary['wall_time']:.0f}s "
                       f"for {summary['sim_time']:.0f}s simulated | "
                       "VTU files: velocity.vtu / pressure.vtu / zones.vtu[/]")
@@ -4970,6 +5089,9 @@ def main():
             # energy equation gate; thermal_enabled() validates the value
             # and defaults to off, so a plain run stays pre-thermal.
             "thermal": _arg(argv, "--thermal"),
+            # acoustic ceiling: combined free-field dBA for the whole fan
+            # wall. worker_main validates and clamps the duty to it.
+            "dba_target": _arg(argv, "--dba-target"),
         }
         worker_main(args)     # config validation happens inside (rank 0)
         return
