@@ -187,9 +187,9 @@
    requirements.inlet_temp_c, walls are adiabatic, and the split fan
    plane carries bulk enthalpy across as a MIXING PLANE (downstream copy
    held at the upstream mean each step). The summary then ADDS
-   t_exhaust_c (solved mass-flow-weighted outlet mean) next to
-   t_exhaust_bulk_c (the bulk estimate) for comparison, frames ADD
-   t_out_c, and the VTU/viz exports gain the "temperature" field.
+   t_exhaust_c (solved outlet mean weighted by the OUTGOING mass flow)
+   next to t_exhaust_bulk_c (the bulk estimate) for comparison, frames
+   ADD t_out_c, and the VTU/viz exports gain the "temperature" field.
 
  DASHBOARD (launcher side, rich.layout + rich.live)
    Live ASCII particle animation over the streamed field: glyphs by local
@@ -2320,10 +2320,16 @@ def worker_main(args):
         sT.getPC().setType("bjacobi")
         sT.setTolerances(rtol=KSP_RTOL)
 
-        # mass-flow-weighted outlet temperature: numerator over the outlet
-        # plane; the denominator is the RAW (un-H-scaled) outlet flux, so
-        # the ratio is engine-agnostic
-        T_flux_form = fem.form(T_n * ufl.dot(u_n, n_f) * ds(SURF_OUTLET))
+        # mass-flow-weighted exhaust temperature, weighted by the OUTGOING
+        # flux only (max(u.n, 0)): the exhaust is the temperature of air
+        # actually LEAVING. Weighting by the net flux degenerates when
+        # transient backflow nearly cancels the outflow - the 2-D engine's
+        # bluff-body shedding does exactly that and produced sub-inlet
+        # nonsense means. Numerator and denominator share the same units
+        # (2-D line fluxes), so the ratio is engine-agnostic un-H-scaled.
+        un_pos = ufl.max_value(ufl.dot(u_n, n_f), 0.0)
+        T_flux_form = fem.form(T_n * un_pos * ds(SURF_OUTLET))
+        q_pos_form = fem.form(un_pos * ds(SURF_OUTLET))
         t_out_c = t_inlet
 
         if rank == 0:
@@ -2585,12 +2591,13 @@ def worker_main(args):
         qf = comm.allreduce(fem.assemble_scalar(flux_front), op=MPI.SUM)
         qo = comm.allreduce(fem.assemble_scalar(flux_out), op=MPI.SUM)
         if thermal:
-            # exhaust temperature: mass-flow-weighted outlet mean over the
-            # RAW fluxes (numerator and denominator share the 2-D line
-            # units, so the ratio is engine-agnostic)
+            # exhaust temperature: outflow-weighted outlet mean (see the
+            # form definitions above for why NOT the net flux)
             tq = comm.allreduce(fem.assemble_scalar(T_flux_form),
                                 op=MPI.SUM)
-            t_out_c = tq / qo if abs(qo) > 1e-12 else t_inlet
+            qp = comm.allreduce(fem.assemble_scalar(q_pos_form),
+                                op=MPI.SUM)
+            t_out_c = tq / qp if qp > 1e-12 else t_inlet
         if two_d:
             # planar line flux [m^2/s] -> volumetric equivalent [m^3/s]
             # (uniform-over-height assumption) so the streamed q_front/
@@ -2703,12 +2710,14 @@ def worker_main(args):
     qf = comm.allreduce(fem.assemble_scalar(flux_front), op=MPI.SUM)
     qo = comm.allreduce(fem.assemble_scalar(flux_out), op=MPI.SUM)
     if thermal:
-        # final exhaust temperature from the SOLVED field (mass-flow-
-        # weighted outlet mean over the raw fluxes) + the field maximum;
-        # collectives, so every rank participates
+        # final exhaust temperature from the SOLVED field (outflow-
+        # weighted outlet mean) + the field maximum; collectives, so
+        # every rank participates
         tq_fin = comm.allreduce(fem.assemble_scalar(T_flux_form),
                                 op=MPI.SUM)
-        t_exhaust_c = tq_fin / qo if abs(qo) > 1e-12 else t_inlet
+        qp_fin = comm.allreduce(fem.assemble_scalar(q_pos_form),
+                                op=MPI.SUM)
+        t_exhaust_c = tq_fin / qp_fin if qp_fin > 1e-12 else t_inlet
         n_own_t = Q.dofmap.index_map.size_local * Q.dofmap.index_map_bs
         t_max_c = comm.allreduce(
             float(T_n.x.array[:n_own_t].max()) if n_own_t else -1e30,
