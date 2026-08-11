@@ -1739,6 +1739,47 @@ def _viz_field_file(vdir, field):
         return None
 
 
+def _viz_geometry(geo):
+    """Labelled component boxes for the host viewer's 3-D annotations.
+
+    zones*.pvtu carries only numeric cell TAGS - no names - so a viewer
+    reading it cannot know which cells are "CPU 1" and which are "RAM".
+    Rather than have it guess, the manifest ships the geometry directly:
+    chassis extents, the fan plane, and every component box carrying the
+    SAME label the ASCII renderer uses. One source, so the terminal view
+    and the pop-out window can never disagree about what the hardware is
+    called or where it sits. Pure data - no solver types cross the wire."""
+    W, H, L = geo["dims"]
+    labels = geo.get("labels") or {}
+
+    def entry(name, box, kind):
+        return {"name": name,
+                "label": labels.get(name) or _block_label(name),
+                "box": [float(v) for v in box], "kind": kind}
+
+    comps = []
+    if geo.get("drives"):
+        dname, dbox = geo["drives"][0], geo["drives"][1]
+        d = entry(dname, dbox, "porous")
+        d["label"] = "DRIVES"      # matches the ASCII canvas, which
+        comps.append(d)            # hardcodes "[ DRIVES ]" for the cage
+    for cname, cbox, _K, _C2 in geo.get("cpus", []):
+        comps.append(entry(cname, cbox, "porous"))
+    for sname, sbox in geo.get("solids", []):
+        comps.append(entry(sname, sbox, "solid"))
+    for z in geo.get("extra_porous", []):
+        comps.append(entry(z["name"], z["box"], "porous"))
+    return {
+        "dims": [float(W), float(H), float(L)],
+        "fan_z": float(geo["fan_z"]),
+        "components": comps,
+        "fan_marks": [{"name": m["name"],
+                       "box": [float(v) for v in m["box"]],
+                       "rpm": m.get("rpm"), "size_mm": m.get("size_mm")}
+                      for m in geo.get("fan_marks", [])],
+    }
+
+
 def worker_main(args):
     """--worker mode: parametric mesh + transient IPCS solve + streaming."""
     from mpi4py import MPI
@@ -2102,7 +2143,8 @@ def worker_main(args):
             _write_viz_manifest({
                 "type": "viz", "step": step, "steps": n_steps, "t": t_sim,
                 "dt": dt, "engine": engine, "cells": int(n_cells),
-                "dir": vdir, "fields": _viz_fields(vdir), "done": False})
+                "dir": vdir, "fields": _viz_fields(vdir),
+                "geometry": _viz_geometry(geo), "done": False})
             viz_dirs.append(vdir)
             while len(viz_dirs) > VIZ_KEEP_DIRS:
                 shutil.rmtree(viz_dirs.pop(0), ignore_errors=True)
@@ -2342,7 +2384,8 @@ def worker_main(args):
                 "type": "viz", "step": n_steps, "steps": n_steps,
                 "t": n_steps * dt, "dt": dt, "engine": engine,
                 "cells": int(n_cells), "dir": ".",
-                "fields": _viz_fields("."), "done": True})
+                "fields": _viz_fields("."),
+                "geometry": _viz_geometry(geo), "done": True})
         except OSError:
             pass
     if rank == 0:

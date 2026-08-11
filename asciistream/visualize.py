@@ -24,7 +24,8 @@ import numpy as np
 import pyvista as pv
 
 from chassis_cfd import VOL_OPEN
-from viewer_sidecar import load_field_mesh, read_manifest, velocity_magnitude
+from viewer_sidecar import (load_field_mesh, read_manifest, spatial_labels,
+                            velocity_magnitude)
 
 # Direction-arrow sizing: the LONGEST glyph spans this fraction of the
 # chassis bounding-box diagonal, whatever the velocity range. |u| is an
@@ -117,6 +118,16 @@ def main(argv=None):
                     hardware = hardware.translate(   # are coplanar with
                         (0.0, 0.0, 2e-3 * diag))     # the flow surface
                 plotter.add_mesh(hardware, color="#9a9aa4", opacity=0.9)
+
+    # Same annotations, same source, as the live pop-out window.
+    lpts, ltxt = spatial_labels(man.get("geometry"))
+    if lpts:
+        print(f"spatial labels: {', '.join(ltxt)}")
+        plotter.add_point_labels(
+            lpts, ltxt, font_size=12, text_color="white",
+            shape_color="#101014", shape_opacity=0.55,
+            point_color="#ffd479", point_size=6, always_visible=True,
+            render_points_as_spheres=True)
 
     plotter.add_text(
         f"{'final' if man.get('done') else 'mid-run'} export  "

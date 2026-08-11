@@ -196,6 +196,69 @@ def load_hardware_overlay(watch_dir):
 #  Interactive scene
 # ------------------------------------------------------------------------------
 
+def spatial_labels(geom):
+    """(points, texts) for the scene's spatial annotations.
+
+    Pure geometry -> no pyvista, no Qt, so it is unit-testable on the host
+    and shared by the live pop-out and the still-image snapshot, which
+    keeps the two captioned identically.
+
+    `geom` is manifest["geometry"]: chassis dims, the fan plane, and every
+    component box already carrying the SAME label the ASCII renderer uses.
+    Returns ([], []) for a missing or malformed block so a caller can just
+    render without annotations rather than fail.
+
+    Conventions: z runs front (intake, 0) to back (exhaust, L); y is
+    HEIGHT. Components sharing a label - the three DIMM banks are all
+    "RAM" - collapse to a single tag at their combined centroid rather
+    than stacking identical labels on top of one another."""
+    if not isinstance(geom, dict):
+        return [], []
+    try:
+        W, H, L = (float(v) for v in geom["dims"])
+    except (KeyError, TypeError, ValueError):
+        return [], []
+    if not (W > 0 and H > 0 and L > 0):
+        return [], []
+
+    pts, txt = [], []
+
+    def put(x, y, z, text):
+        pts.append([float(x), float(y), float(z)])
+        txt.append(text)
+
+    # nudged just outside the shell so the tags do not float in the flow
+    pad = 0.04 * L
+    put(0.5 * W, 0.5 * H, -pad, "FRONT (Intake / Drives)")
+    put(0.5 * W, 0.5 * H, L + pad, "BACK (Exhaust / PSUs)")
+
+    fan_z = geom.get("fan_z")
+    if isinstance(fan_z, (int, float)) and 0.0 <= float(fan_z) <= L:
+        put(0.5 * W, H, float(fan_z), "Fan Wall")
+
+    groups = {}
+    for c in geom.get("components") or []:
+        if not isinstance(c, dict):
+            continue
+        label, box = c.get("label"), c.get("box")
+        if not label or not isinstance(box, (list, tuple)) or len(box) != 6:
+            continue
+        try:
+            vals = [float(v) for v in box]
+        except (TypeError, ValueError):
+            continue      # convert BEFORE inserting: setdefault would
+                          # otherwise leave an empty group behind when the
+                          # conversion raises, and the centroid below then
+                          # divides by zero
+        groups.setdefault(str(label), []).append(vals)
+    for label, boxes in sorted(groups.items()):
+        cx = sum(0.5 * (b[0] + b[3]) for b in boxes) / len(boxes)
+        cz = sum(0.5 * (b[2] + b[5]) for b in boxes) / len(boxes)
+        cy = min(max(b[4] for b in boxes), H)   # sit on top of the block
+        put(cx, cy, cz, label)
+    return pts, txt
+
+
 class SceneState:
     """Everything one viewer session renders + the refresh logic driven by
     a QTimer. Every failure mode in here degrades to a log line and a
@@ -207,6 +270,9 @@ class SceneState:
         self.camera_set = False
         self.overlay = load_hardware_overlay(watch_dir)
         self.overlay_added = False
+        # geometry is fixed for a run, so the spatial labels are placed
+        # once and left alone while the field refreshes underneath them
+        self.labels_added = False
         self._logged = set()       # one log line per distinct situation
 
     def _log_once(self, msg):
@@ -288,6 +354,8 @@ class SceneState:
                 plotter.add_mesh(hardware, color="#9a9aa4", opacity=0.9,
                                  name="hardware", show_scalar_bar=False)
 
+        self._add_labels(plotter, man)
+
         if self.overlay is not None and not self.overlay_added:
             try:
                 plotter.add_mesh(self.overlay, color="#d0d0d8", opacity=0.5,
@@ -319,6 +387,38 @@ class SceneState:
             self.key = key
             log.info("rendered %s step %s (done=%s)",
                      man.get("dir"), man.get("step"), done)
+
+    def _add_labels(self, plotter, man):
+        """Spatial annotations inside the 3-D scene: which end is the
+        intake, which is the exhaust, where the fan wall sits, and what
+        each component block is.
+
+        Everything comes from manifest["geometry"], which the solver
+        builds from the SAME geo dict and the SAME labels the ASCII
+        renderer uses - the two views cannot drift apart. Components
+        sharing a label (three DIMM banks all called RAM) collapse to one
+        annotation at their combined centroid instead of stacking three
+        identical tags on top of each other. Older manifests have no
+        geometry block; the scene then simply renders unlabelled."""
+        if self.labels_added:
+            return
+        pts, txt = spatial_labels(man.get("geometry"))
+        if not pts:
+            if man.get("geometry") is not None:
+                self._log_once("manifest geometry block unusable - 3-D "
+                               "labels skipped")
+            return
+        try:
+            plotter.add_point_labels(
+                pts, txt, name="spatial_labels", font_size=13,
+                text_color="white", shape_color="#101014", shape_opacity=0.55,
+                point_color="#ffd479", point_size=7, always_visible=True,
+                render_points_as_spheres=True)
+            self.labels_added = True
+            log.info("3-D spatial labels added: %s", ", ".join(txt))
+        except Exception as exc:
+            # annotations are a convenience - never lose the scene over one
+            self._log_once(f"3-D labels could not be added ({exc})")
 
 
 def run_viewer_session(watch_dir):
