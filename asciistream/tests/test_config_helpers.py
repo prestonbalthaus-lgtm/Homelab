@@ -177,14 +177,57 @@ def test_gpu_count_clamped_to_eight(s6029):
     assert out["populated_pcie_slots"] == 8
 
 
-def test_nic_adds_one_slot_and_marks_it(s6029):
-    n0 = s6029["populated_pcie_slots"]
+def test_nic_only_means_exactly_one_card(s6029):
+    """A NIC and no GPU is ONE card, not the profile default plus one.
+
+    This assertion was inverted before: it pinned `min(n0 + 1, 8)`, i.e.
+    3 cards on the 6029U, because the old code incremented whatever the
+    profile shipped with. Answering "no GPUs, yes NIC" would then mesh
+    MORE hardware than the untouched profile - the same root cause as the
+    PCIe ghosting bug (the wizard's answers did not own the population).
+    The test encoded the defect rather than the requirement, so it moves
+    with the fix."""
     out = cc.apply_hw_overrides(s6029, {"nic": True})
-    assert out["populated_pcie_slots"] == min(n0 + 1, 8)
+    assert out["populated_pcie_slots"] == 1
     assert out["nic_slot"] is True
     geo = cc.build_geometry(out)
-    last = f"pcie_card_{out['populated_pcie_slots']}"
-    assert geo["labels"][last] == "NIC"
+    cards = [n for n, _b in geo["solids"] if n.startswith("pcie_card_")]
+    assert cards == ["pcie_card_1"]
+    assert geo["labels"]["pcie_card_1"] == "NIC"
+
+
+def test_no_gpu_and_no_nic_leaves_zero_cards(s6029):
+    """The reported ghosting bug: answering 'no' to both prompts must
+    leave the PCIe zone EMPTY, not fall back to the profile default.
+    Only the static risers may remain in the domain."""
+    n0 = s6029["populated_pcie_slots"]
+    assert n0 > 0, "fixture must start with cards, or this proves nothing"
+    out = cc.apply_hw_overrides(s6029, {"nic": False})
+    assert out["populated_pcie_slots"] == 0
+    assert out["nic_slot"] is False
+    geo = cc.build_geometry(out)
+    cards = [n for n, _b in geo["solids"] if n.startswith("pcie_card_")]
+    risers = [n for n, _b in geo["solids"] if "riser" in n]
+    assert cards == [], f"ghost PCIe cards still in the domain: {cards}"
+    assert risers, "static risers must survive when the cards are gone"
+    assert not any("PCIe" in str(v) for v in geo["labels"].values())
+
+
+@pytest.mark.parametrize("gpus,nic,expect", [
+    (0, False, 0), (0, True, 1), (1, False, 1),
+    (2, False, 2), (2, True, 3), (8, True, 8),   # clamped at 8
+])
+def test_pcie_population_is_exactly_what_was_answered(s6029, gpus, nic,
+                                                      expect):
+    """Card count comes from the answers alone, never from the profile."""
+    hw = {"nic": nic}
+    if gpus:
+        hw.update(gpu_count=gpus, gpu_watts=100.0)
+    out = cc.apply_hw_overrides(copy.deepcopy(s6029), hw)
+    assert out["populated_pcie_slots"] == expect
+    geo = cc.build_geometry(out)
+    cards = [n for n, _b in geo["solids"] if n.startswith("pcie_card_")]
+    assert len(cards) == expect
 
 
 def test_gpu_ignored_without_pcie_zone(s6029):

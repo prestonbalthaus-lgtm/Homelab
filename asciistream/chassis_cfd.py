@@ -969,16 +969,24 @@ def apply_hw_overrides(s, hw):
         reqs["inlet_temp_c"] = float(hw["inlet_temp_c"])
     if hw.get("exhaust_temp_c") is not None:
         reqs["outlet_temp_max_c"] = float(hw["exhaust_temp_c"])
-    if s.get("pcie_zone_z"):
+    if s.get("pcie_zone_z") and ("nic" in hw or "gpu_count" in hw):
+        # Once the wizard has asked, its answers OWN the PCIe population -
+        # a card exists only because the user fitted a GPU or a NIC, so the
+        # count is computed from the answers alone and whatever the profile
+        # shipped with is superseded. Two bugs lived in doing this
+        # incrementally: answering "no" to both left the profile default
+        # standing (ghost cards in the mesh and every renderer), and "no
+        # GPU + yes NIC" incremented that default instead of meaning one
+        # card. Slots left empty are open air; only the static risers stay.
+        # ("nic" is always written by the wizard when pcie_zone_z exists,
+        # so its presence marks "the user was actually asked". Scripted
+        # --worker runs never reach here and keep their JSON defaults.)
         n_gpu = int(hw.get("gpu_count") or 0)
+        s["populated_pcie_slots"] = min(n_gpu + (1 if hw.get("nic") else 0), 8)
+        s["nic_slot"] = bool(hw.get("nic"))
         if n_gpu > 0:
-            s["populated_pcie_slots"] = min(n_gpu, 8)
             s["heat_load"] = (float(s["heat_load"])
                               + n_gpu * float(hw.get("gpu_watts") or 0.0))
-        if hw.get("nic"):
-            s["populated_pcie_slots"] = min(
-                int(s.get("populated_pcie_slots", 0)) + 1, 8)
-            s["nic_slot"] = True
     return s
 
 
@@ -2318,11 +2326,18 @@ def worker_main(args):
         with VTKFile(comm, path, "w") as vtk:
             vtk.write_mesh(msh)
             vtk.write_function(func)
-    if viz_every and rank == 0:
+    if rank == 0:
         try:
             # final manifest: point the viewer at the FULL final export in
             # the working directory and mark the run done. Same atomic
             # replace; the last viz_step dirs stay for late readers.
+            # Written on EVERY run, not just when mid-run export was on:
+            # it is how any downstream reader learns which numbered .pvtu
+            # actually carries each array (the bare <field>.vtu is a
+            # dataless collection index and the first piece set is
+            # mesh-only). Gating it on viz_every meant a normal solve with
+            # no viewer attached left visualize.py with nothing to read -
+            # exactly the case a post-run snapshot tool exists for.
             _write_viz_manifest({
                 "type": "viz", "step": n_steps, "steps": n_steps,
                 "t": n_steps * dt, "dt": dt, "engine": engine,
