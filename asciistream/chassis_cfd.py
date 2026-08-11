@@ -1032,6 +1032,11 @@ def apply_hw_overrides(s, hw):
     superseding the GPU+NIC derivation below. GPU wattage still folds
     into heat_load from gpu_count/gpu_watts regardless. Absent = the
     legacy behaviour, bit for bit."""
+    # Explicit bay count wins over the type prompt: 0 removes the cage
+    # (build_geometry then emits no drive zone at all and the front bay is
+    # open air). Clamped at 0 - a negative count is meaningless.
+    if hw.get("drive_bay_count") is not None:
+        s["drive_bay_count"] = max(0, int(hw["drive_bay_count"]))
     dt = hw.get("drive_type")
     if dt and s.get("drive_zone_z") and int(s.get("drive_bay_count", 0)) > 0:
         s["drive_zeta"] = float(s["drive_zeta"]) * DRIVE_TYPE_ZETA[dt]
@@ -4137,12 +4142,22 @@ def launcher_wizard(console, cfg, config_path):
                   "the profile default)[/]")
     hw = {}
     if int(s.get("drive_bay_count", 0)) > 0 and s.get("drive_zone_z"):
-        dsel = Prompt.ask("  Drive type  [1] 2.5in NVMe/SAS  [2] 3.5in HDD",
-                          choices=["1", "2"],
+        # [0] removes the cage entirely: diskless compute nodes are real
+        # (the C4130 is usually ordered that way), and the geometry layer
+        # has always supported drive_bay_count = 0 - only this prompt
+        # blocked it.
+        dsel = Prompt.ask("  Drive type  [0] No drives  "
+                          "[1] 2.5in NVMe/SAS  [2] 3.5in HDD",
+                          choices=["0", "1", "2"],
                           default="2" if "3.5" in str(s.get("drive_bay_type")
                                                       or "") else "1",
                           console=console)
-        hw["drive_type"] = ("2.5in NVMe/SAS", "3.5in HDD")[int(dsel) - 1]
+        if dsel == "0":
+            hw["drive_bay_count"] = 0
+            console.print("    [dim]drive cage removed - the front bay "
+                          "becomes open intake air[/]")
+        else:
+            hw["drive_type"] = ("2.5in NVMe/SAS", "3.5in HDD")[int(dsel) - 1]
     hw["heat_load_w"] = FloatPrompt.ask(
         "  Total system wattage [W of heat load]",
         default=float(s["heat_load"]), console=console)
@@ -4156,17 +4171,36 @@ def launcher_wizard(console, cfg, config_path):
         console.print("    [yellow]note:[/] exhaust ceiling <= intake - the "
                       "outlet temperature check can only FAIL.")
     if s.get("pcie_zone_z"):
-        if Confirm.ask("  GPUs present?", default=False, console=console):
-            n_gpu = IntPrompt.ask("    Number of GPUs (1-8)", default=1,
-                                  console=console)
-            hw["gpu_count"] = max(1, min(int(n_gpu), 8))
-            hw["gpu_watts"] = max(0.0, FloatPrompt.ask(
-                "    Wattage per GPU [W]", default=250.0, console=console))
-            console.print(f"    [dim]{hw['gpu_count']} card(s) meshed in "
-                          "the PCIe zone; wattage joins the heat load[/]")
-        hw["nic"] = Confirm.ask("  Networking card populated "
-                                "(Mellanox/Intel class)?", default=False,
-                                console=console)
+        # Explicit card count rather than a binary GPU/NIC toggle: a slot
+        # is either occupied or not, and the profile's pcie_max_slots caps
+        # it so cards only spawn into risers that physically exist.
+        max_slots = int(s.get("pcie_max_slots", PCIE_MAX_SLOTS_DEFAULT))
+        n_cards = IntPrompt.ask(
+            f"  How many PCIe cards installed? [0 to {max_slots}]",
+            default=0, console=console)
+        n_cards = max(0, min(int(n_cards), max_slots))
+        hw["pcie_card_count"] = n_cards
+        if n_cards:
+            n_gpu = IntPrompt.ask(
+                f"    How many of those {n_cards} are GPUs?",
+                default=0, console=console)
+            n_gpu = max(0, min(int(n_gpu), n_cards))
+            if n_gpu:
+                hw["gpu_count"] = n_gpu
+                hw["gpu_watts"] = max(0.0, FloatPrompt.ask(
+                    "    Wattage per GPU [W]", default=250.0,
+                    console=console))
+            # any remaining card is treated as a NIC-class card, which is
+            # what earns the [ NIC ] label on the last slot
+            hw["nic"] = n_gpu < n_cards
+            console.print(
+                f"    [dim]{n_cards} card(s) meshed in the PCIe zone"
+                + (f"; {n_gpu} GPU(s), wattage joins the heat load"
+                   if n_gpu else "") + "[/]")
+        else:
+            hw["nic"] = False
+            console.print("    [dim]no cards fitted - the slots stay open "
+                          "air; only the static risers remain[/]")
     else:
         console.print("    [dim]profile has no PCIe riser - GPU/NIC prompts "
                       "skipped[/]")
