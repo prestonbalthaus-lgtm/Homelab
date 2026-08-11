@@ -1,4 +1,4 @@
-# ASCIISTREAM v0.9.1
+# ASCIISTREAM v0.9.2
 
 **Terminal CFD for server chassis.** Watch the airflow through a Supermicro
 2U, a Dell GPU node or an Arista switch as a live ASCII particle field —
