@@ -20,10 +20,21 @@ instead (viewer_sidecar.py); this script is the scriptable variant.
 import argparse
 import sys
 
+import numpy as np
 import pyvista as pv
 
 from chassis_cfd import VOL_OPEN
 from viewer_sidecar import load_field_mesh, read_manifest, velocity_magnitude
+
+# Direction-arrow sizing: the LONGEST glyph spans this fraction of the
+# chassis bounding-box diagonal, whatever the velocity range. |u| is an
+# unbounded physical quantity (a 6029U coarse solve peaks at ~26 m/s on a
+# 0.82 m diagonal), so a fixed absolute glyph factor cannot work - the
+# scale must come from the data + geometry.
+GLYPH_FRAC = 0.05
+# Seeds below this fraction of the peak speed get no arrow: at ~0 m/s an
+# arrow's orientation is numerical noise and only clutters dead zones.
+GLYPH_MIN_FRAC = 0.02
 
 
 def main(argv=None):

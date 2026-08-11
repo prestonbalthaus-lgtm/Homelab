@@ -3292,6 +3292,22 @@ def write_report(server_cfg, params, fan_cfg, summary, comp_rows, fails,
     rc.print(f"simulated: {summary['sim_time']:.1f} s @ "
              f"dt={summary.get('dt', SIM_DT):g} s "
              f"(wall {summary['wall_time']:.0f} s)")
+    # Which engine produced these numbers is load-bearing context: the same
+    # profile reports very different through-flow on the 2-D slice (no
+    # floor/ceiling friction) than in 3-D, so a report that omitted it
+    # would make two incomparable runs look interchangeable.
+    eng = str(summary.get("engine", "3d")).lower()
+    duty = summary.get("fan_duty")
+    line = ("2-D planar (mid-height slice)" if eng == "2d"
+            else "3-D volumetric")
+    if duty is not None:
+        line += f"  |  fan duty {float(duty) * 100:.0f} % of rated RPM"
+    rc.print(f"engine   : {line}")
+    if eng == "2d":
+        rc.print("           NOTE: the planar engine models no floor/"
+                 "ceiling friction and therefore")
+        rc.print("           OVER-predicts through-flow - use 3-D "
+                 "volumetric for quantitative work.")
     hw = params.get("hw") or {}
     bits = []
     if hw.get("drive_type"):
