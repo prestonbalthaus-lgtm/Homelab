@@ -56,16 +56,21 @@ def test_staged_profile_builds_empty_and_full(name):
         cc.build_geometry(cfg)
 
 
-def test_no_collision_with_existing_profiles():
-    """The bare DL360/DL380 keys are the PRE-EXISTING Gen10 entries; the
-    staged generations use suffixed keys so nothing shadows them."""
+def test_staged_profiles_were_merged_faithfully():
+    """Was a pre-merge collision guard; the staged generations are now IN
+    server_configs.json, so the invariant flips to a provenance check -
+    each staged profile must be present and byte-equal in the live config,
+    so staging/ keeps documenting exactly what ships. The bare DL360/DL380
+    keys remain the PRE-EXISTING Gen10 entries and are still not shadowed
+    (asserted separately below)."""
     with (REPO / "server_configs.json").open() as fh:
-        existing = set(json.load(fh)["servers"])
-    assert not (set(PROFILES) & existing), (
-        "staged HPE/Supermicro profiles must not shadow existing "
-        "server_configs.json entries (DL360/DL380 Gen10 and 6029U are "
-        "pre-existing and excluded by design)"
-    )
+        live = json.load(fh)["servers"]
+    missing = sorted(set(PROFILES) - set(live))
+    assert not missing, f"staged HPE/SMC profiles absent from live: {missing}"
+    drifted = [k for k in PROFILES if live[k] != PROFILES[k]]
+    assert not drifted, (
+        f"staged and live definitions disagree for {drifted} - staging/ no "
+        "longer documents what actually ships")
 
 
 def test_bare_dl360_dl380_not_restaged():

@@ -45,13 +45,20 @@ def test_staged_profile_builds_empty_and_full(name):
         cc.build_geometry(cfg)
 
 
-def test_no_collision_with_existing_profiles():
+def test_staged_profiles_were_merged_faithfully():
+    """This was a pre-merge collision guard. The staging profiles have now
+    been merged into server_configs.json, so the useful invariant flips:
+    every staged profile must be PRESENT in the live config and byte-equal
+    to the staged definition. That keeps staging/ as honest provenance for
+    the SOURCES ledger and catches silent drift between the two."""
     with (REPO / "server_configs.json").open() as fh:
-        existing = set(json.load(fh)["servers"])
-    assert not (set(PROFILES) & existing), (
-        "staged Dell profiles must not shadow existing server_configs.json "
-        "entries (R640/R740xd are pre-existing and excluded by design)"
-    )
+        live = json.load(fh)["servers"]
+    missing = sorted(set(PROFILES) - set(live))
+    assert not missing, f"staged Dell profiles absent from live config: {missing}"
+    drifted = [k for k in PROFILES if live[k] != PROFILES[k]]
+    assert not drifted, (
+        f"staged and live definitions disagree for {drifted} - staging/ no "
+        "longer documents what actually ships")
 
 
 def test_r640_r740xd_not_restaged():

@@ -196,20 +196,63 @@ def test_no_config_or_no_geometry_resolve_no_profile(tmp_path):
     assert ha.derive_profile(str(tmp_path), None) is None
 
 
-def test_every_shipped_profile_has_unique_dims():
-    """The dims->profile derivation is only sound while no two profiles
-    in the REAL config share chassis dims. Guard that invariant."""
-    with open(REPO / ha.CONFIG_NAME) as f:
-        servers = json.load(f)["servers"]
-    dims = {}
+def _dims_index(servers):
+    idx = {}
     for name, s in servers.items():
         key = (round(s["chassis_width"], 6), round(s["chassis_height"], 6),
                round(s["chassis_length"], 6))
-        assert key not in dims, (
-            f"profiles {dims[key]!r} and {name!r} share chassis dims "
-            f"{key}: dims-based asset derivation would go ambiguous - "
-            "publish manifest['profile'] instead")
-        dims[key] = name
+        idx.setdefault(key, []).append(name)
+    return idx
+
+
+def test_shared_chassis_dims_resolve_to_no_profile_not_a_wrong_one():
+    """Chassis dims are NOT unique across the profile library, and cannot
+    be made unique: vendors genuinely reuse a chassis across generations
+    (R620/R630, R720/R730/R730xd, R740/R7425, R650/R6525, DL360 Gen8/Gen9
+    are all real shared bodies). This test used to assert uniqueness; that
+    premise died when the library grew from 10 to 39 profiles.
+
+    The invariant that actually matters is that ambiguity is HANDLED:
+    `derive_profile` must resolve a shared-dims manifest to None - falling
+    through to assets/default.* - rather than silently picking whichever
+    profile it happened to iterate first and loading the wrong chassis
+    model. The exact route is `manifest["profile"]`, which the solver now
+    publishes; dims matching is only the fallback for older manifests."""
+    with open(REPO / ha.CONFIG_NAME) as f:
+        servers = json.load(f)["servers"]
+    shared = {k: v for k, v in _dims_index(servers).items() if len(v) > 1}
+    assert shared, ("expected at least one shared-chassis family in the "
+                    "library; if this ever fails, the fallback is "
+                    "unambiguous again and this test can go back to "
+                    "asserting uniqueness")
+    for dims, names in shared.items():
+        man = {"geometry": {"dims": list(dims)}}
+        got = ha.derive_profile(str(REPO), man)
+        assert got is None, (
+            f"dims {dims} are shared by {sorted(names)} but derive_profile "
+            f"returned {got!r} - it must refuse to guess")
+
+
+def test_unique_dims_still_resolve_exactly(cfg):
+    """The fallback must still work for the profiles that ARE unique."""
+    with open(REPO / ha.CONFIG_NAME) as f:
+        servers = json.load(f)["servers"]
+    unique = {k: v[0] for k, v in _dims_index(servers).items()
+              if len(v) == 1}
+    assert len(unique) >= 20, "expected many unambiguous profiles"
+    for dims, name in list(unique.items())[:12]:
+        man = {"geometry": {"dims": list(dims)}}
+        assert ha.derive_profile(str(REPO), man) == name
+
+
+def test_explicit_profile_key_beats_ambiguous_dims():
+    """A manifest carrying `profile` must win outright, which is how a
+    shared-chassis machine gets its own asset at all."""
+    with open(REPO / ha.CONFIG_NAME) as f:
+        servers = json.load(f)["servers"]
+    shared = [v for v in _dims_index(servers).values() if len(v) > 1][0]
+    man = {"profile": shared[0], "geometry": {"dims": [0.434, 0.0428, 0.731]}}
+    assert ha.derive_profile(str(REPO), man) == shared[0]
 
 
 # ------------------------------------------------------------------------------
