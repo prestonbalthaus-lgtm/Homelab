@@ -18,7 +18,8 @@ Docker.
 
 - **Live ASCII dashboard** — 2-D mid-plane streaklines (`.` stagnant → `~`
   slow → `-` moderate → `*` fast, green = healthy flow, red = dead zone),
-  labelled geometry (`[ CPU 1 ]`, `[ RAM ]`, `[ PCIe ]`, `[ FAN WALL ]`),
+  labelled geometry (`[ CPU 1 ]`, `[ RAM ]`, `[ PCIe ]`, `[ RISER ]`,
+  `[ DRIVES ]`, `[ FAN WALL ]` — `[ PCIe ]` only when cards are fitted),
   front/rear cross-section panes and a full-width btop-style **CFD
   WORKERS** strip — braille history graphs and meters (psutil) scoped to
   the solver's own processes only: summed USS memory and CPU normalised
@@ -31,6 +32,33 @@ Docker.
   export when the run completes. Provisioned once with
   `./setup_host_viewer.sh`; entirely optional — without it `p` prints a
   one-line reason and everything else works as before.
+- **Dual engine — fast 2-D planar / heavy 3-D volumetric** — chosen in the
+  wizard or with `--engine`. The 2-D engine is a genuine planar
+  formulation on the mid-height slice (~13× fewer cells, ~26× quicker),
+  not a cheaper render of the 3-D solve; the engine used is recorded in
+  every run report along with its over-prediction caveat.
+- **Energy equation (ΔT)** — `--thermal on` (or the wizard prompt) solves
+  real temperature transport instead of a bulk balance: the system wattage
+  becomes volumetric heat sources on the CPU/GPU/optics regions, and the
+  run reports the solved exhaust temperature, the peak hot spot, and an
+  energy audit confirming the injected watts match the configured load.
+  A `temperature` field joins the VTU and viewer exports.
+- **Fan Affinity Laws** — `--fan-duty` scales the quadratic fan curve by
+  RPM fraction (flow ∝ N, pressure ∝ N², power ∝ N³, dBA ≈ +50·log₁₀ N)
+  before the operating point, replacing the old fixed 100 %-duty
+  assumption; the acoustics/power table follows the chosen duty.
+- **3-D spatial labels** — the pop-out scene is annotated in place:
+  `FRONT (Intake / Drives)`, `BACK (Exhaust / PSUs)`, `Fan Wall`,
+  `CPU 1`/`CPU 2`, `RAM`, and the rest of the hardware, using the same
+  labels the ASCII renderer stamps so the two views cannot disagree.
+- **Optional CAD chassis assets** — drop a `.glb`/`.gltf` (Draco
+  compression supported) at `assets/<profile>.glb` and the viewer uses it
+  as the chassis boundary; with no asset — the normal case, none ship —
+  it builds the chassis procedurally from the solver's own geometry. See
+  `hardware_assets.py` for the search order and the scale/fit rule.
+- **Cluster tooling (`hpc/`)** — an Apptainer recipe and a Slurm `.sbatch`
+  generator for multi-node runs over InfiniBand. **Untested against real
+  HPC hardware** — see `hpc/README.md` for the itemised assumptions.
 - **ASCII 3-D chassis view** — the CAD-style isometric projection of the
   physical chassis (component boxes extruded in ASCII, top faces coloured
   by local air speed, the fan wall and PSU fans picked out in gold):
@@ -47,7 +75,11 @@ Docker.
 - **Hardware prompts** — every run asks drive type (2.5″ NVMe/SAS vs 3.5″
   HDD → drive-cage impedance), total system wattage, ambient intake and
   desired exhaust temperature, GPU count + wattage (meshed as PCIe cards,
-  watts joining the heat load) and a NIC slot. All runtime overrides —
+  watts joining the heat load) and a NIC slot. **The answers own the PCIe
+  population:** the card count is exactly GPUs + NIC, so declining both
+  leaves the slots empty — open air, with only the static riser cages
+  standing in the flow — rather than falling back to the profile's
+  default card count. All runtime overrides —
   `server_configs.json` on disk is never edited by them.
 - **Fan library + custom fan creator** — real 80 mm server fans and generic
   40/60/120 mm classes, or enter any max-CFM / max-mmH₂O pair in the wizard.
@@ -222,6 +254,13 @@ coarse; a number is a literal element size in millimetres, e.g.
 `--mesh 0.8`), `--config PATH`. Custom fan: `--fan custom --fan-cfm 95
 --fan-mmh2o 38`.
 
+| Flag | Default | What it does |
+|---|---|---|
+| `--engine 2d\|3d` | `3d` | 2-D solves only the mid-height slice: ~13× fewer cells and ~26× quicker, but it models no floor/ceiling friction so it over-predicts through-flow (+5 % near steady state on 6029U/coarse, more during the early transient). Explore in 2d, confirm in 3d. |
+| `--fan-duty F` | `1.0` | Fraction of rated RPM. Fan Affinity Laws applied before the operating point: flow ∝ N, pressure ∝ N², shaft power ∝ N³, dBA ≈ +50·log₁₀(N/N_rated). |
+| `--thermal on\|off` | `off` | Solve the energy equation (see **Physics**). Off is byte-identical to the pre-thermal solver. |
+| `--viz-every N` | `0` (off) | Export a field snapshot every N steps for the host viewer. The launcher sets this automatically when the viewer sidecar is attached. |
+
 ## Configuration — `server_configs.json`
 
 Written automatically with the built-in example on first run
@@ -323,10 +362,34 @@ Transient incompressible Navier–Stokes, incremental pressure-correction
 explicit treatment) for drive cages, heatsinks and porous custom zones, and
 three linear solves per step (GMRES+ILU tentative velocity, CG+BoomerAMG
 pressure Poisson, CG+Jacobi correction). Turbulence is a constant effective
-eddy viscosity (block-level electronics-cooling practice); the outlet
-temperature is the bulk balance T_in + P/(ρ·Q·c_p). The fan plane is imposed
-on two coincident boundary copies of a deliberately split mesh — an interior
-Dirichlet plane on continuous elements leaks flux.
+eddy viscosity (block-level electronics-cooling practice). The fan plane is
+imposed on two coincident boundary copies of a deliberately split mesh — an
+interior Dirichlet plane on continuous elements leaks flux.
+
+**Outlet temperature** is the bulk balance T_in + P/(ρ·Q·c_p) unless
+`--thermal on` is given, which adds a real **energy equation**: advection–
+diffusion of temperature coupled to the solved velocity, backward-Euler with
+the velocity lagged to uₙ, P1 elements, eddy diffusivity ν_eff/Pr_t
+(Pr_t = 0.9), GMRES + block-Jacobi/ILU (advection makes the operator
+nonsymmetric, so the CG+AMG used for the pressure Poisson does not apply).
+The profile's wattage becomes volumetric sources on the meshed heat
+regions — porous CPU heatsinks and any zone carrying `heat_w` — normalised
+by mesh-measured volumes so the injected power is exact. Wizard-fitted GPUs
+are meshed as **solid** PCIe cards and therefore have no interior cells, so
+their watts go into the 1 cm shell of fluid washing each card; if that shell
+is empty the share is folded back into the distributed remainder with a
+warning rather than silently vanishing. The run then reports the **solved**
+mass-flow-weighted exhaust temperature beside the bulk estimate, a hot-spot
+peak, and an energy audit (watts injected vs watts configured).
+
+The two exhaust figures are weighted differently on purpose: the bulk
+balance divides by the *net* outlet flux, while the solved mean is weighted
+by the *outgoing* flux only (max(u·n, 0)) — the temperature of air actually
+leaving. They agree once the flow settles and there is no outlet backflow;
+they diverge while q_out is still converging, or when recirculation makes
+the outgoing flux exceed the net. Net-flux weighting was tried first and
+abandoned: transient shedding in the 2-D wake can nearly cancel the outflow
+and produce a sub-inlet, unphysical mean.
 
 **Accuracy disclaimer:** chassis outer dimensions follow vendor specs, but
 internal layouts, ζ values and heat loads are documented engineering
