@@ -14,6 +14,8 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+.venv-viewer/
+.pytest_cache/
 
 # --- local tool state ---------------------------------------------------------
 .claude/settings.local.json
