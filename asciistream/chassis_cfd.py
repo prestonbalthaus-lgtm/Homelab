@@ -116,6 +116,34 @@
    vendor specs; internal layouts, zetas and fan counts are documented
    engineering estimates. Generic 40/60/120 mm class fan curves accompany
    the 80 mm server fans.
+   PCIe RISER CAGES (config key pcie_risers): STATIC solid cage blocks at
+   pcie_zone_z that model the riser mechanics rather than the plug-in
+   cards - they keep standing in the flow when populated_pcie_slots is 0
+   (schema reference: the build_geometry docstring).
+
+ DUAL ENGINE (worker args key "engine": "3d" default | "2d")
+   3d: the full chassis volume - tetrahedra, P2 velocity in R^3 (the
+   original path, unchanged). 2d: a TRUE planar formulation on the chassis
+   MID-HEIGHT x-z plane (y = H/2) - triangles, P2 velocity in R^2, the
+   SAME IPCS scheme / three linear solves / semi-implicit convection, the
+   same split-mesh fan plane trick (in 2-D the fan plane is a LINE, still
+   imposed on two coincident boundary copies - an interior Dirichlet line
+   on continuous elements leaks flux exactly as the 3-D plane does), and
+   the same implicit Darcy-Forchheimer sinks in 2-D vector form. Every
+   component box that straddles y = H/2 is projected to its x-z footprint
+   rectangle; a box that does not reach mid-height is absent from the
+   slice. Line fluxes [m^2/s] are scaled by H into volumetric equivalents,
+   and the streamed frames/summary keep the exact 3-D header keys and
+   array shapes (the mid slice replicated over the volumetric stack), so
+   the dashboard cannot tell which engine ran.
+   FAN DUTY (worker args key "fan_duty": fraction of rated RPM, 1.0 =
+   rated): the fan curve is scaled by the Fan Affinity Laws BEFORE the
+   operating-point intersection - Qmax ~ N, dPmax ~ N^2 - and the summary
+   carries affinity-scaled telemetry (power ~ N^3, dBA + 50*log10(N/N0)).
+   VIZ EXPORT (worker args key "viz_every": every N steps, 0 = off,
+   default off): atomic mid-run VTU snapshots in per-step directories
+   plus viz_manifest.json (replaced atomically LAST) for a host-side
+   viewer polling the shared working directory.
 
  PHYSICS - transient incompressible Navier-Stokes, incremental pressure-
  correction (Chorin/IPCS family), backward-Euler in time with SEMI-IMPLICIT
@@ -303,6 +331,23 @@ OUT_VELOCITY = "velocity.vtu"
 OUT_PRESSURE = "pressure.vtu"
 OUT_ZONES    = "zones.vtu"
 
+# --- Periodic mid-run viz export (worker args key "viz_every", 0 = off) -------
+# Every export lands in its OWN viz_step_NNNNNN/ directory and the manifest
+# is atomically REPLACED LAST (os.replace of a temp file), so a host-side
+# reader polling the shared working directory never observes a torn file:
+# it only learns of a directory after every dataset inside it is complete.
+OUT_VIZ_MANIFEST = "viz_manifest.json"
+VIZ_DIR_PREFIX   = "viz_step_"
+VIZ_KEEP_DIRS    = 2     # current + previous (a slow reader may still hold
+                         # the previous directory open); older ones removed
+
+# --- Fan affinity laws (worker args key "fan_duty" = N/N_rated) ---------------
+# Q ~ N, dP ~ N^2, shaft power ~ N^3, dBA ~ dBA_rated + 50*log10(N/N_rated).
+# Duty is clamped to a sane PWM-style band: below 5 % a server fan stalls,
+# far above rated RPM the affinity extrapolation stops being honest.
+FAN_DUTY_MIN = 0.05
+FAN_DUTY_MAX = 1.5
+
 # --- Dashboard ----------------------------------------------------------------
 ANIM_FPS         = 12
 N_PARTICLES      = 380
@@ -427,6 +472,11 @@ DEFAULT_CONFIG = {
             "cpu_zeta": 55.0, "cpu_permeability": 2e-7,
             "total_dimm_slots": 24,
             "populated_pcie_slots": 2, "pcie_zone_z": [0.55, 0.65],
+            # riser cages hug the side walls, clear of the card band
+            # (cards span x 0.02..W-0.02): static mechanics that stay
+            # in the flow even with populated_pcie_slots 0
+            "pcie_risers": [{"name": "riser_left", "x": [0.004, 0.016]},
+                            {"name": "riser_right", "x": [0.414, 0.426]}],
             "heat_load": 350.0, "baseline_zeta": 25.0,
             # rear PSU bank: dense high-impedance porous blocks (each PSU is
             # a packed brick the air must be pulled through by its own 40 mm
@@ -466,6 +516,8 @@ DEFAULT_CONFIG = {
             "cpu_zeta": 70.0, "cpu_permeability": 2e-7,
             "total_dimm_slots": 24,
             "populated_pcie_slots": 2, "pcie_zone_z": [0.55, 0.65],
+            "pcie_risers": [{"name": "riser_left", "x": [0.004, 0.016]},
+                            {"name": "riser_right", "x": [0.418, 0.430]}],
             "heat_load": 300.0, "baseline_zeta": 25.0,
             "custom_zones": [
                 {"name": "psu_1", "label": "PSU 1", "type": "porous",
@@ -502,6 +554,8 @@ DEFAULT_CONFIG = {
             "cpu_zeta": 55.0, "cpu_permeability": 2e-7,
             "total_dimm_slots": 24,
             "populated_pcie_slots": 3, "pcie_zone_z": [0.55, 0.66],
+            "pcie_risers": [{"name": "riser_left", "x": [0.004, 0.016]},
+                            {"name": "riser_right", "x": [0.418, 0.430]}],
             "heat_load": 400.0, "baseline_zeta": 25.0,
             "custom_zones": [
                 {"name": "psu_1", "label": "PSU 1", "type": "porous",
@@ -538,6 +592,8 @@ DEFAULT_CONFIG = {
             "cpu_zeta": 70.0, "cpu_permeability": 2e-7,
             "total_dimm_slots": 24,
             "populated_pcie_slots": 2, "pcie_zone_z": [0.52, 0.62],
+            "pcie_risers": [{"name": "riser_left", "x": [0.004, 0.016]},
+                            {"name": "riser_right", "x": [0.418, 0.430]}],
             "heat_load": 290.0, "baseline_zeta": 25.0,
             "custom_zones": [
                 {"name": "psu_1", "label": "PSU 1", "type": "porous",
@@ -574,6 +630,8 @@ DEFAULT_CONFIG = {
             "cpu_zeta": 55.0, "cpu_permeability": 2e-7,
             "total_dimm_slots": 24,
             "populated_pcie_slots": 4, "pcie_zone_z": [0.54, 0.66],
+            "pcie_risers": [{"name": "riser_left", "x": [0.004, 0.016]},
+                            {"name": "riser_right", "x": [0.418, 0.430]}],
             "heat_load": 380.0, "baseline_zeta": 25.0,
             "custom_zones": [
                 {"name": "psu_1", "label": "PSU 1", "type": "porous",
@@ -612,6 +670,12 @@ DEFAULT_CONFIG = {
             "cpu_zeta": 60.0, "cpu_permeability": 2e-7,
             "total_dimm_slots": 16,
             "populated_pcie_slots": 0, "pcie_zone_z": [0.55, 0.65],
+            # GPU riser blades in the 6 mm lanes between the passive GPU
+            # bays and the centre PSU bank (touching faces are fine); the
+            # side-wall positions of the rack servers would overlap the
+            # GPU porous zones here
+            "pcie_risers": [{"name": "riser_left", "x": [0.176, 0.182]},
+                            {"name": "riser_right", "x": [0.252, 0.258]}],
             "heat_load": 1500.0, "baseline_zeta": 25.0,
             "custom_zones": [
                 {"name": "gpu_1", "label": "GPU 1", "type": "porous",
@@ -654,6 +718,7 @@ DEFAULT_CONFIG = {
             "cpu_label": "ASIC",
             "total_dimm_slots": 4,
             "populated_pcie_slots": 0,
+            "pcie_risers": [],       # switch: no riser hardware exists
             "heat_load": 350.0, "baseline_zeta": 20.0,
             "optics_zone_z": [0.005, 0.05],
             "custom_zones": [
@@ -693,6 +758,7 @@ DEFAULT_CONFIG = {
             "cpu_label": "ASIC",
             "total_dimm_slots": 4,
             "populated_pcie_slots": 0,
+            "pcie_risers": [],       # switch: no riser hardware exists
             "heat_load": 400.0, "baseline_zeta": 20.0,
             "optics_zone_z": [0.005, 0.05],
             "custom_zones": [
@@ -730,6 +796,7 @@ DEFAULT_CONFIG = {
             "cpu_sockets": 0,
             "total_dimm_slots": 0,
             "populated_pcie_slots": 0,
+            "pcie_risers": [],       # router: line cards, not PCIe risers
             "heat_load": 1800.0, "baseline_zeta": 30.0,
             "optics_zone_z": [0.13, 0.17],
             "custom_zones": [
@@ -777,6 +844,9 @@ DEFAULT_CONFIG = {
             "cpu_label": "CPU TOWER",
             "total_dimm_slots": 4,
             "populated_pcie_slots": 0,
+            "pcie_risers": [],       # tower: cards mount straight to the
+                                     # board, no riser cage (GPU is a
+                                     # custom zone)
             "heat_load": 450.0, "baseline_zeta": 15.0,
             "custom_zones": [
                 {"name": "front_mesh", "label": "FRONT MESH",
@@ -859,6 +929,8 @@ CUSTOM_SERVER_TEMPLATE = {
     "cpu_zeta": 55.0, "cpu_permeability": 2e-7,
     "total_dimm_slots": 16,
     "populated_pcie_slots": 2, "pcie_zone_z": [0.55, 0.65],
+    "pcie_risers": [{"name": "riser_left", "x": [0.004, 0.016]},
+                    {"name": "riser_right", "x": [0.414, 0.426]}],
     "heat_load": 300.0, "baseline_zeta": 25.0,
     "mesh_settings": {"coarse": {"element_size_mm": 15.0},
                       "medium": {"element_size_mm": 8.0},
@@ -975,6 +1047,24 @@ def build_geometry(server_cfg):
         banks), clamped to 80 % of the local gap; y 6 %..55 % of H.
       - PCIe: populated_pcie_slots solid cards spread across the width of
         pcie_zone_z with 20 mm margins/gaps; y 12 %..82 % of H.
+      - pcie_risers: STATIC riser cages at pcie_zone_z that persist when
+        the cards are gone - populated_pcie_slots 0 still meshes them
+        (the riser is chassis mechanics, not a plug-in card). A list of
+        cage specs, each: "x": [x0, x1] cage x-range in METRES (required);
+        optional "y_frac": [f0, f1] vertical extent as fractions of H
+        (default [0.06, 0.90] - a little taller than the cards it holds);
+        optional "z_frac": [f0, f1] sub-range of pcie_zone_z (default
+        [0.0, 1.0] = the full zone); optional "name" (default
+        pcie_riser_N; must NOT start with "pcie_card_") and "label"
+        (canvas text, default "RISER"). Risers are SOLID blocks (sheet-
+        metal cage + riser PCB = full blockage) appended to geo["solids"],
+        so the gmsh cut, _validate_geometry and every renderer consume
+        them from the one source. A riser overlapping a generated PCIe
+        card raises ValueError (cards are runtime-dependent via the GPU/
+        NIC prompts; touching faces are fine); riser-vs-porous overlap,
+        chassis escape and fan-wall straddling are rejected by
+        _validate_geometry like any other solid. An empty list means
+        "no riser hardware" (switches, routers, towers).
       - custom_zones: list of named boxes [x0,y0,z0,x1,y1,z1] in metres.
         type "solid" (PSU blocks, cards) blocks flow entirely; type
         "porous" is an impedance zone (zeta over the zone's z-length +
@@ -1022,6 +1112,11 @@ def build_geometry(server_cfg):
     solids = []
     slots = int(server_cfg.get("total_dimm_slots", 0))
     if n_cpu > 0 and slots > 0:
+        # DIMM banks DELIBERATELY share the CPU zone's z-range (they flank
+        # the sockets). Bound explicitly here: inheriting cz0/cz1 from the
+        # CPU block above was a scope leak that only worked because both
+        # blocks are guarded by n_cpu > 0.
+        cz0, cz1 = server_cfg["cpu_zone_z"]
         n_banks = n_cpu + 1
         spb = max(1, int(round(slots / n_banks)))
         gaps = []
@@ -1052,6 +1147,44 @@ def build_geometry(server_cfg):
                             x0 + card_w, 0.82 * H, float(pz1))))
         if server_cfg.get("nic_slot"):     # wizard: last populated slot is
             labels[f"pcie_card_{n_pcie}"] = "NIC"    # the networking card
+
+    # PCIe riser cages: STATIC chassis mechanics at pcie_zone_z. Unlike the
+    # cards above they do NOT depend on populated_pcie_slots - pulling every
+    # card (or the wizard shipping 0 GPUs) leaves the cages standing in the
+    # flow. Solid blocks (cage sheet metal + riser PCB = full blockage) so
+    # the mesh cut and all renderers pick them up from geo["solids"].
+    risers = server_cfg.get("pcie_risers") or []
+    if risers:
+        if not server_cfg.get("pcie_zone_z"):
+            raise ValueError("pcie_risers requires pcie_zone_z")
+        rz0, rz1 = (float(v) for v in server_cfg["pcie_zone_z"])
+        card_boxes = [(n, b) for n, b in solids
+                      if n.startswith("pcie_card_")]
+        for j, spec in enumerate(risers):
+            name = spec.get("name") or f"pcie_riser_{j + 1}"
+            if name.startswith("pcie_card_"):
+                raise ValueError(f"riser '{name}': names must not start "
+                                 "with 'pcie_card_' (reserved for cards)")
+            try:
+                rx0, rx1 = (float(v) for v in spec["x"])
+            except (KeyError, TypeError, ValueError):
+                raise ValueError(f"riser '{name}': needs \"x\": [x0, x1] "
+                                 "in metres")
+            yf0, yf1 = (float(v) for v in spec.get("y_frac", (0.06, 0.90)))
+            zf0, zf1 = (float(v) for v in spec.get("z_frac", (0.0, 1.0)))
+            b = (rx0, yf0 * H, rz0 + zf0 * (rz1 - rz0),
+                 rx1, yf1 * H, rz0 + zf1 * (rz1 - rz0))
+            # cards are generated from the RUNTIME populated_pcie_slots, so
+            # a riser/card collision is a config error caught here (solid-
+            # vs-solid overlap is not otherwise validated; touching is ok)
+            for cn, cb in card_boxes:
+                if all(min(b[i + 3], cb[i + 3]) - max(b[i], cb[i]) > 1e-6
+                       for i in range(3)):
+                    raise ValueError(
+                        f"riser '{name}' overlaps '{cn}' - keep riser "
+                        "x-ranges clear of the card band")
+            labels[name] = spec.get("label", "RISER")
+            solids.append((name, b))
 
     solid_telem = {}
     extra_porous = []
@@ -1135,15 +1268,90 @@ def mesh_desc(level, lc):
     return f"{lc * 1000:g} mm custom"
 
 
-def est_cells(geo, lc):
-    """Tetrahedron count estimate ~ 3.6*V_fluid/lc^3 for the graded fields
-    (fine band lc, bulk 2.2*lc). Calibrated on the 6029U: coarse 25,008
-    actual vs 22.7k estimated, medium 139,097 vs 150k - within ~10 %.
-    Guidance for the RAM warning and progress panel only."""
+def _midplane_hit(b, H):
+    """True when 3-D box b PROPERLY straddles the chassis mid-height plane
+    y = H/2 - the membership test of the 2-D planar engine (a box merely
+    touching the plane is out). Strictness matters: two boxes stacked in y
+    can then never both land in the plane with overlapping footprints,
+    because both containing an open interval around H/2 means they overlap
+    in y, and the 3-D overlap validation already forbids that combination
+    - so projected 2-D footprints are guaranteed overlap-free."""
+    return b[1] + GEOM_TOL < 0.5 * H < b[4] - GEOM_TOL
+
+
+def est_cells(geo, lc, engine="3d"):
+    """Cell count estimate - guidance for the RAM warning and progress
+    panel only.
+    3d: tetrahedra ~ 3.6*V_fluid/lc^3 for the graded fields (fine band lc,
+    bulk 2.2*lc). Calibrated on the 6029U: coarse 25,008 actual vs 22.7k
+    estimated, medium 139,097 vs 150k - within ~10 %.
+    2d: triangles ~ 1.5*A_fluid/lc^2 over the mid-height footprint (solids
+    straddling y = H/2 subtracted). UNCALIBRATED engineering estimate
+    sitting between the fine-band (~2.3/lc^2) and bulk (~0.5/lc^2)
+    triangle densities of the same grading."""
     W, H, L = geo["dims"]
+    if str(engine).lower() == "2d":
+        area = W * L - sum((b[3] - b[0]) * (b[5] - b[2])
+                           for _n, b in geo["solids"]
+                           if _midplane_hit(b, H))
+        return 1.5 * area / lc**2
     vol = W * H * L - sum((b[3] - b[0]) * (b[4] - b[1]) * (b[5] - b[2])
                           for _n, b in geo["solids"])
     return 3.6 * vol / lc**3
+
+
+def fan_operating_point(server_cfg, fan_cfg, geo, duty=1.0):
+    """Fan operating point ESTIMATE -> inlet BC level, plus the affinity-
+    scaled telemetry numbers. Pure numpy - importable and host-testable
+    with no solver stack (the single source of truth for this math; the
+    worker and the tests both call it).
+
+    The quadratic fan curve P = Pmax(1-(Q/Qmax)^2), fan_count fans in
+    parallel, is intersected with the impedance estimate K = rho*zeta_est/
+    (2A^2) (custom porous zones contribute zeta x their covered cross-
+    section fraction). The meshed CFD impedance is the truth; this
+    estimate only chooses the fan-plane velocity.
+
+    duty = N/N_rated (1.0 = rated RPM = legacy behaviour, bit-identical).
+    Fan Affinity Laws applied BEFORE the intersection: Q ~ N (qmax*duty),
+    dP ~ N^2 (pmax*duty^2); telemetry: shaft power ~ N^3, dBA ~ dBA_rated
+    + 50*log10(duty). rpm/watts/dba are None when the fan config carries
+    no rating (custom wizard fans).
+
+    Returns dict: q_op [m^3/s], fan_vz [m/s], cfm (= q_op in CFM),
+    zeta_est, K_est, qmax [m^3/s, all fans, duty-scaled], pmax [Pa,
+    duty-scaled], duty, rpm_rated, rpm (duty-scaled), cfm_max / mmh2o_max
+    (PER-FAN curve maxima, duty-scaled), watts, dba (per-fan,
+    duty-scaled)."""
+    W, H, _L = geo["dims"]
+    area = W * H
+    zeta_est = (float(server_cfg.get("drive_zeta", 0.0))
+                + 0.5 * float(server_cfg.get("cpu_zeta", 0.0))
+                + float(server_cfg.get("baseline_zeta", 25.0)))
+    for z in geo["extra_porous"]:
+        b = z["box"]
+        afrac = (b[3] - b[0]) * (b[4] - b[1]) / area
+        zeta_est += z["zeta"] * min(afrac, 1.0)
+    K_est = RHO_AIR * zeta_est / (2.0 * area**2)
+    duty = float(duty)
+    qmax = (fan_cfg["max_cfm"] / M3S_TO_CFM * server_cfg["fan_count"]
+            * duty)
+    pmax = fan_cfg["max_mmh2o"] * 9.80665 * duty ** 2
+    q_op = float(np.sqrt(pmax / (K_est + pmax / qmax**2)))
+    rpm = fan_cfg.get("rpm")
+    dba = fan_cfg.get("max_dBA")
+    watts = fan_cfg.get("max_wattage")
+    return {
+        "q_op": q_op, "fan_vz": q_op / area, "cfm": q_op * M3S_TO_CFM,
+        "zeta_est": zeta_est, "K_est": K_est, "qmax": qmax, "pmax": pmax,
+        "duty": duty,
+        "rpm_rated": rpm,
+        "rpm": rpm * duty if rpm else None,
+        "cfm_max": fan_cfg["max_cfm"] * duty,
+        "mmh2o_max": fan_cfg["max_mmh2o"] * duty ** 2,
+        "watts": watts * duty ** 3 if watts else None,
+        "dba": dba + 50.0 * float(np.log10(duty)) if dba else None,
+    }
 
 
 def _validate_geometry(geo):
@@ -1160,7 +1368,13 @@ def _validate_geometry(geo):
     porous = ([(geo["drives"][0], geo["drives"][1])] if geo["drives"] else [])
     porous += [(n, b) for n, b, _k, _c in geo["cpus"]]
     porous += [(z["name"], z["box"]) for z in geo["extra_porous"]]
-    for nm, b in porous + geo["solids"]:
+    # the optics telemetry slab joins the envelope/straddle checks (a
+    # malformed optics_zone_z used to pass silently) but NOT the overlap
+    # checks below: it is a sampling region, not meshed geometry, and it
+    # deliberately overlaps porous cages (switch QSFP zones)
+    optics = ([("optics_box", tuple(geo["optics_box"]))]
+              if geo.get("optics_box") else [])
+    for nm, b in porous + geo["solids"] + optics:
         if not ok(b):
             raise ValueError(f"box '{nm}' escapes the chassis: {b}")
         if b[2] < fz < b[5]:
@@ -1319,9 +1533,146 @@ def _gmsh_build_model(geo, lc):
     gmsh.model.mesh.generate(3)
 
 
-def worker_build_mesh(geo, comm, lc):
+def _gmsh_build_model_2d(geo, lc):
+    """TRUE 2-D planar engine: gmsh model of the chassis MID-HEIGHT plane
+    y = H/2. Model coordinates are (chassis x, chassis z) - gmsh's native
+    x-y plane carries the footprints, so meshed coordinate 1 IS the flow
+    direction z. Pure gmsh - no dolfinx/MPI - host-testable like the 3-D
+    builder; the caller owns gmsh.initialize()/finalize().
+
+    Same architecture as _gmsh_build_model:
+      - TWO mesh components meeting at the fan LINE (gmsh y = fan_z)
+        WITHOUT sharing it (two coincident boundary copies): an interior
+        velocity-Dirichlet line on continuous elements leaks flux through
+        a divergence sheet exactly as the 3-D plane did, so the split-mesh
+        trick is kept in 2-D.
+      - Every solid/porous box that PROPERLY straddles y = H/2
+        (_midplane_hit) is projected to its x-z footprint rectangle and
+        cut from / fragmented into whichever side of the fan line it sits
+        on - the identical CSG + fragment parent->child classification.
+        Boxes that do not reach mid-height DO NOT EXIST in this domain (a
+        component absent at that height is absent from the slice); 3-D
+        overlap validation guarantees in-plane footprints never overlap.
+      - Same physical tags: dim-2 groups for open/porous regions, dim-1
+        groups for front / fan / outlet / wall boundary lines (cut solid
+        outlines land in walls, giving the cards their no-slip edges).
+    """
+    import gmsh
+
+    occ = gmsh.model.occ
+    W, H, L = geo["dims"]
+    fz = geo["fan_z"]
+    lc_bulk = min(2.2 * lc, 0.035)
+
+    def add_rect(b):       # x-z footprint of a 3-D box (gmsh y = chassis z)
+        return occ.addRectangle(b[0], b[2], 0.0, b[3] - b[0], b[5] - b[2])
+
+    solids = [(n, b) for n, b in geo["solids"] if _midplane_hit(b, H)]
+    porous = []
+    if geo["drives"] and _midplane_hit(geo["drives"][1], H):
+        porous.append(("drives", geo["drives"][1]))
+    for _n, b, _k, _c in geo["cpus"]:
+        if _midplane_hit(b, H):
+            porous.append(("cpus", b))
+    for z in geo["extra_porous"]:
+        if _midplane_hit(z["box"], H):
+            porous.append((z["tag"], z["box"]))
+
+    zone_vols = {key: [] for key, _b in porous}
+    open_vols = []
+    for z0, z1 in ((0.0, fz), (fz, L)):        # the two mesh components
+        side = [(2, occ.addRectangle(0.0, z0, 0.0, W, z1 - z0))]
+        cut = [(2, add_rect(b)) for _n, b in solids
+               if z0 - GEOM_TOL <= b[2] and b[5] <= z1 + GEOM_TOL]
+        if cut:
+            side, _ = occ.cut(side, cut)
+        tools = [(key, add_rect(b)) for key, b in porous
+                 if z0 - GEOM_TOL <= b[2] and b[5] <= z1 + GEOM_TOL]
+        if not tools:
+            open_vols.extend(tag for _d, tag in side)
+            continue
+        _out, out_map = occ.fragment(side, [(2, t) for _k, t in tools])
+        side_children = set()
+        for children in out_map[:len(side)]:
+            side_children.update(tag for _d, tag in children)
+        claimed = set()
+        for (key, _t), children in zip(tools, out_map[len(side):]):
+            for _d, vtag in children:
+                if vtag not in side_children:
+                    raise RuntimeError(
+                        f"porous footprint piece {vtag} fell outside the "
+                        "fluid region - overlap validation should have "
+                        "caught this config")
+                if vtag not in claimed:
+                    zone_vols[key].append(vtag)
+                    claimed.add(vtag)
+        open_vols.extend(t for t in sorted(side_children)
+                         if t not in claimed)
+    occ.synchronize()
+
+    gmsh.model.addPhysicalGroup(2, open_vols, VOL_OPEN, name="open_air")
+    if zone_vols.get("drives"):
+        gmsh.model.addPhysicalGroup(2, zone_vols["drives"], VOL_DRIVES,
+                                    name="drives")
+    if zone_vols.get("cpus"):
+        gmsh.model.addPhysicalGroup(2, zone_vols["cpus"], VOL_CPUS,
+                                    name="cpus")
+    for z in geo["extra_porous"]:
+        if zone_vols.get(z["tag"]):
+            gmsh.model.addPhysicalGroup(2, zone_vols[z["tag"]], z["tag"],
+                                        name=z["name"])
+
+    front_s, fan_s, outlet_s, wall_s = [], [], [], []
+    for dim, tag in gmsh.model.getEntities(1):
+        surfs_up, _ = gmsh.model.getAdjacencies(dim, tag)
+        if len(surfs_up) != 1:
+            continue              # interior open/porous interface line
+        c = occ.getCenterOfMass(dim, tag)
+        if abs(c[1]) < GEOM_TOL:               # gmsh y == chassis z
+            front_s.append(tag)
+        elif abs(c[1] - L) < GEOM_TOL:
+            outlet_s.append(tag)
+        elif abs(c[1] - fz) < GEOM_TOL:
+            fan_s.append(tag)
+        else:
+            wall_s.append(tag)    # side walls + cut solid outlines
+    gmsh.model.addPhysicalGroup(1, front_s, SURF_FRONT, name="front")
+    gmsh.model.addPhysicalGroup(1, fan_s, SURF_FAN, name="fan_wall")
+    gmsh.model.addPhysicalGroup(1, outlet_s, SURF_OUTLET, name="outlet")
+    gmsh.model.addPhysicalGroup(1, wall_s, SURF_WALLS, name="walls")
+
+    # same graded size bands as the 3-D builder; gmsh Y is chassis z here
+    comp_z = ([b[2] for _n, b in solids]
+              + [b[2] for key, b in porous if key != "drives"])
+    comp_z0 = min(comp_z) if comp_z else fz
+    front_z0 = geo["drives"][1][2] if geo["drives"] else 0.0
+    f_fine = gmsh.model.mesh.field.add("Box")
+    for k, v in (("VIn", lc), ("VOut", lc_bulk),
+                 ("XMin", -0.01), ("XMax", W + 0.01),
+                 ("YMin", max(fz, comp_z0 - 0.03)), ("YMax", L - 0.02),
+                 ("ZMin", -0.01), ("ZMax", 0.01)):
+        gmsh.model.mesh.field.setNumber(f_fine, k, v)
+    f_med = gmsh.model.mesh.field.add("Box")
+    for k, v in (("VIn", 1.3 * lc), ("VOut", lc_bulk),
+                 ("XMin", -0.01), ("XMax", W + 0.01),
+                 ("YMin", max(0.0, front_z0 - 0.02)),
+                 ("YMax", min(L, fz + 0.03)),
+                 ("ZMin", -0.01), ("ZMax", 0.01)):
+        gmsh.model.mesh.field.setNumber(f_med, k, v)
+    f_min = gmsh.model.mesh.field.add("Min")
+    gmsh.model.mesh.field.setNumbers(f_min, "FieldsList", [f_fine, f_med])
+    gmsh.model.mesh.field.setAsBackgroundMesh(f_min)
+    gmsh.option.setNumber("Mesh.MeshSizeMax", lc_bulk)
+    gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
+    gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
+    gmsh.model.mesh.generate(2)
+
+
+def worker_build_mesh(geo, comm, lc, engine="3d"):
     """gmsh parametric mesh -> distributed dolfinx mesh (rank 0 builds via
-    _gmsh_build_model, which holds the geometry/meshing logic)."""
+    _gmsh_build_model / _gmsh_build_model_2d, which hold the geometry and
+    meshing logic). engine "2d" meshes the mid-height x-z plane with
+    gdim=2; the default "3d" path is untouched."""
     import gmsh
     from dolfinx.io import gmsh as gio
 
@@ -1329,8 +1680,12 @@ def worker_build_mesh(geo, comm, lc):
     gmsh.option.setNumber("General.Terminal", 0)
     try:
         if comm.rank == 0:
-            _gmsh_build_model(geo, lc)
-        mesh_data = gio.model_to_mesh(gmsh.model, comm, 0, gdim=3)
+            if engine == "2d":
+                _gmsh_build_model_2d(geo, lc)
+            else:
+                _gmsh_build_model(geo, lc)
+        mesh_data = gio.model_to_mesh(gmsh.model, comm, 0,
+                                      gdim=2 if engine == "2d" else 3)
     finally:
         gmsh.finalize()
     return mesh_data.mesh, mesh_data.cell_tags, mesh_data.facet_tags
@@ -1338,7 +1693,11 @@ def worker_build_mesh(geo, comm, lc):
 
 def eval_at_points_parallel(msh, fun, pts, ncomp):
     """Point evaluation that works on a distributed mesh: each rank fills the
-    points it owns, rank 0 receives the combined array (others get None)."""
+    points it owns, rank 0 receives the combined array (others get None).
+    Works for BOTH engines: dolfinx always takes (n, 3) query points, so on
+    the 2-D planar mesh callers pass [x, z, 0] with the third column zero
+    (mesh coordinate 1 is the chassis flow direction z) and ncomp=2 for
+    the velocity."""
     from dolfinx import geometry
 
     local = np.full((len(pts), ncomp), np.nan)
@@ -1357,6 +1716,33 @@ def eval_at_points_parallel(msh, fun, pts, ncomp):
         take = np.isnan(out[:, 0]) & ~np.isnan(arr[:, 0])
         out[take] = arr[take]
     return out
+
+
+def _viz_field_file(vdir, field):
+    """Relative path of the dataset file that actually CARRIES a field's
+    array inside a dolfinx VTKFile export directory - the manifest names it
+    explicitly so the host viewer never has to guess.
+
+    dolfinx's VTKFile writes a PVD-style collection index named
+    '<field>.vtu' (misleading extension - it carries NO data) plus numbered
+    .pvtu piece sets; when write_mesh() was also called the FIRST numbered
+    set is mesh-only (vtkGhostType & friends, no field array) and the LAST
+    one is the write_function() output that holds the array - so the
+    highest-numbered set is returned. Falls back to plain numbered .vtu
+    pieces for a serial writer that emits no .pvtu. Returns None when
+    nothing matches (the reader then skips that field)."""
+    try:
+        names = sorted(n for n in os.listdir(vdir)
+                       if n.startswith(field) and n.endswith(".pvtu"))
+        if not names:
+            names = sorted(n for n in os.listdir(vdir)
+                           if n.startswith(field) and n.endswith(".vtu")
+                           and n != field + ".vtu")
+        if not names:
+            return None
+        return os.path.relpath(os.path.join(vdir, names[-1]))
+    except OSError:
+        return None
 
 
 def worker_main(args):
@@ -1380,25 +1766,42 @@ def worker_main(args):
     W, H, L = geo["dims"]
     area = W * H
 
+    # --- engine select: "3d" full chassis volume (default, unchanged) or
+    # "2d" TRUE planar solve on the mid-height x-z plane (y = H/2)
+    engine = str(args.get("engine") or "3d").lower()
+    if engine not in ("2d", "3d"):
+        raise SystemExit('--engine must be "2d" or "3d"')
+    two_d = engine == "2d"
+
+    # --- fan duty: fraction of rated RPM (1.0 = rated = legacy behaviour)
+    try:
+        fan_duty = float(args.get("fan_duty") or 1.0)
+    except (TypeError, ValueError):
+        raise SystemExit("--fan-duty must be a number "
+                         "(fraction of rated RPM)")
+    if not (FAN_DUTY_MIN <= fan_duty <= FAN_DUTY_MAX):
+        raise SystemExit(f"--fan-duty must be within [{FAN_DUTY_MIN:g}, "
+                         f"{FAN_DUTY_MAX:g}] (fraction of rated RPM)")
+
+    # --- mid-run viz export cadence: every N steps, 0 = off (default: the
+    # host viewer is optional and the legacy single final export stands)
+    try:
+        viz_every = max(0, int(args.get("viz_every") or 0))
+    except (TypeError, ValueError):
+        raise SystemExit("--viz-every must be an integer step count")
+
     # fan operating point ESTIMATE -> inlet BC level (the meshed CFD
-    # impedance is the truth; this just sets the plane velocity). Custom
-    # porous zones contribute their zeta scaled by covered cross-section.
-    zeta_est = (float(server_cfg.get("drive_zeta", 0.0))
-                + 0.5 * float(server_cfg.get("cpu_zeta", 0.0))
-                + float(server_cfg.get("baseline_zeta", 25.0)))
-    for z in geo["extra_porous"]:
-        b = z["box"]
-        afrac = (b[3] - b[0]) * (b[4] - b[1]) / area
-        zeta_est += z["zeta"] * min(afrac, 1.0)
-    K_est = RHO_AIR * zeta_est / (2.0 * area**2)
-    qmax = fan_cfg["max_cfm"] / M3S_TO_CFM * server_cfg["fan_count"]
-    pmax = fan_cfg["max_mmh2o"] * 9.80665
-    q_op = float(np.sqrt(pmax / (K_est + pmax / qmax**2)))
-    fan_vz = q_op / area
+    # impedance is the truth; this just sets the plane velocity). The
+    # math - impedance estimate, quadratic-curve intersection AND the
+    # affinity-law duty scaling - lives in the pure, host-testable
+    # fan_operating_point(); this is its only production call site.
+    fan_op = fan_operating_point(server_cfg, fan_cfg, geo, duty=fan_duty)
+    q_op = fan_op["q_op"]
+    fan_vz = fan_op["fan_vz"]
 
     mesh_level = args.get("mesh") or "coarse"
     lc = mesh_level_lc(server_cfg, mesh_level)   # enforces MESH_MM_FLOOR
-    n_est = est_cells(geo, lc)
+    n_est = est_cells(geo, lc, engine=engine)
 
     sim_time = float(args["sim_time"])
     dt = float(args.get("dt") or SIM_DT)
@@ -1438,14 +1841,26 @@ def worker_main(args):
               f"(lc={lc * 1000:g} mm, ~{n_est:,.0f} elements estimated)")
         print(f" [worker] fan operating estimate: {q_op * M3S_TO_CFM:.1f} CFM "
               f"-> plane velocity {fan_vz:.2f} m/s")
+        if two_d:
+            print(" [worker] engine=2d: TRUE planar solve on the mid-height "
+                  f"x-z slice (y = H/2 = {500.0 * H:g} mm), "
+                  "triangles + P2^2/P1")
+        if fan_duty != 1.0:
+            print(f" [worker] fan duty {100.0 * fan_duty:g}% of rated RPM "
+                  f"(affinity: Qmax x{fan_duty:g}, "
+                  f"dPmax x{fan_duty ** 2:g})")
+        if viz_every:
+            print(f" [worker] mid-run viz export every {viz_every} steps -> "
+                  f"{VIZ_DIR_PREFIX}NNNNNN/ + {OUT_VIZ_MANIFEST}")
 
-    msh, cell_tags, facet_tags = worker_build_mesh(geo, comm, lc)
+    msh, cell_tags, facet_tags = worker_build_mesh(geo, comm, lc,
+                                                   engine=engine)
     n_cells = msh.topology.index_map(msh.topology.dim).size_global
     fdim = msh.topology.dim - 1
     msh.topology.create_connectivity(fdim, msh.topology.dim)
 
     V = fem.functionspace(msh, basix.ufl.element(
-        "Lagrange", msh.basix_cell(), 2, shape=(3,)))
+        "Lagrange", msh.basix_cell(), 2, shape=(2 if two_d else 3,)))
     Q = fem.functionspace(msh, basix.ufl.element(
         "Lagrange", msh.basix_cell(), 1))
     u, v = ufl.TrialFunction(V), ufl.TestFunction(V)
@@ -1479,6 +1894,8 @@ def worker_main(args):
         a1 += (mu_c / kc + 0.5 * rho_c * cc * umag_n) * ufl.dot(u, v) \
             * dx(VOL_CPUS)
     for z in geo["extra_porous"]:     # custom impedance zones, own tag each
+        if two_d and not _midplane_hit(z["box"], H):
+            continue                  # zone absent from the mid-height plane
         a1 += (mu_c / z["K"] + 0.5 * rho_c * z["C2"] * umag_n) \
             * ufl.dot(u, v) * dx(z["tag"])
     L1 = ((rho_c / dt_c) * ufl.dot(u_n, v) * dx
@@ -1502,8 +1919,12 @@ def worker_main(args):
     # BCs: fan plane (both coincident copies) + no-slip walls (listed after
     # the fan BC so shared rim dofs resolve to no-slip)
     u_fan = fem.Function(V)
-    u_fan.interpolate(lambda x: np.vstack((0 * x[0], 0 * x[0],
-                                           np.full_like(x[0], fan_vz))))
+    if two_d:      # planar mesh coordinate 1 IS the flow direction z
+        u_fan.interpolate(lambda x: np.vstack((0 * x[0],
+                                               np.full_like(x[0], fan_vz))))
+    else:
+        u_fan.interpolate(lambda x: np.vstack((0 * x[0], 0 * x[0],
+                                               np.full_like(x[0], fan_vz))))
     fan_base = u_fan.x.array.copy()
     bc_fan = fem.dirichletbc(u_fan, fem.locate_dofs_topological(
         V, fdim, facet_tags.find(SURF_FAN)))
@@ -1544,14 +1965,54 @@ def worker_main(args):
     # classic mid-plane the 2-D dashboard, ASCII view and report consume
     # (one eval call feeds both, bit-identical).
     vol_ys = [f * H for f in VOL_SLICE_FRACS]
-    pts_vol = np.array([[x, y, z] for y in vol_ys for x in xs for z in zs])
     mini_rows = int(np.clip(round(H / 0.01), 4, 9))
     xs_m = (np.arange(MINI_COLS) + 0.5) * W / MINI_COLS
     ys_m = (np.arange(mini_rows) + 0.5) * H / mini_rows
-    pts_front = np.array([[x, y, 0.012] for y in ys_m for x in xs_m])
-    pts_rear = np.array([[x, y, L - 0.015] for y in ys_m for x in xs_m])
+    if two_d:
+        # the planar mesh IS the mid-height slice: one x-z grid (query
+        # points padded to (n, 3) with a zero third column), and the
+        # front/rear minis become x-LINES near the two open ends
+        pts_vol = np.array([[x, z, 0.0] for x in xs for z in zs])
+        pts_front = np.array([[x, 0.012, 0.0] for x in xs_m])
+        pts_rear = np.array([[x, L - 0.015, 0.0] for x in xs_m])
+    else:
+        pts_vol = np.array([[x, y, z] for y in vol_ys for x in xs
+                            for z in zs])
+        pts_front = np.array([[x, y, 0.012] for y in ys_m for x in xs_m])
+        pts_rear = np.array([[x, y, L - 0.015] for y in ys_m for x in xs_m])
 
     def sample_and_send(step, t_sim, qf, qo):
+        # FROZEN WIRE PROTOCOL: both engines emit the SAME header keys and
+        # the SAME array names/shapes on the same sampling grid - the
+        # launcher dashboard must not need to know which engine ran. The
+        # 2-D branch replicates its single plane across the volumetric
+        # stack (the mid slice IS the whole 2-D solution) and tiles the
+        # front/rear lines to the mini-pane shape; it only ADDS the
+        # "engine" header key.
+        if two_d:
+            vals = eval_at_points_parallel(msh, u_n, pts_vol, 2)
+            pv = eval_at_points_parallel(msh, p_n, pts_vol, 1)
+            fr = eval_at_points_parallel(msh, u_n, pts_front, 2)
+            re = eval_at_points_parallel(msh, u_n, pts_rear, 2)
+            if rank == 0:
+                nsl = len(VOL_SLICE_FRACS)
+                u_mid = vals.reshape(MAIN_ROWS, ncols, 2)
+                sp_mid = np.linalg.norm(vals, axis=1).reshape(MAIN_ROWS,
+                                                              ncols)
+                p_mid = pv[:, 0].reshape(MAIN_ROWS, ncols)
+                sp_vol = np.repeat(sp_mid[None, :, :], nsl, axis=0)
+                p_vol = np.repeat(p_mid[None, :, :], nsl, axis=0)
+                spf = np.tile(np.linalg.norm(fr, axis=1), (mini_rows, 1))
+                spr = np.tile(np.linalg.norm(re, axis=1), (mini_rows, 1))
+                send({"type": "frame", "t": t_sim, "step": step,
+                      "steps": n_steps, "q_front": qf, "q_out": qo,
+                      "fan_vz": fan_vz, "cells": int(n_cells),
+                      "vol_y": vol_ys, "engine": "2d"},
+                     {"ux": u_mid[:, :, 0], "uz": u_mid[:, :, 1],
+                      "speed": sp_mid, "press": p_mid,
+                      "vol_speed": sp_vol, "vol_press": p_vol,
+                      "front": spf, "rear": spr})
+            return
         vals = eval_at_points_parallel(msh, u_n, pts_vol, 3)
         pv = eval_at_points_parallel(msh, p_n, pts_vol, 1)
         fr = eval_at_points_parallel(msh, u_n, pts_front, 3)
@@ -1574,10 +2035,92 @@ def worker_main(args):
                   "vol_speed": sp_vol, "vol_press": p_vol,
                   "front": spf, "rear": spr})
 
+    # ---- periodic mid-run viz export (host-side viewer) ---------------------
+    # Atomicity contract: every export lands in its OWN fresh
+    # viz_step_NNNNNN/ directory; the manifest is replaced atomically
+    # (os.replace of a temp file) ONLY AFTER a barrier confirms every
+    # rank's datasets are on disk. A reader that polls OUT_VIZ_MANIFEST
+    # therefore never sees a torn file - it learns of a directory only
+    # once the directory is complete. The two newest directories are kept
+    # (a slow reader may still hold the previous one); older ones go.
+    # Like send(): a failed export must never kill the solve.
+    viz_state = {}
+    viz_dirs = []
+
+    def _write_viz_manifest(man):
+        tmp = OUT_VIZ_MANIFEST + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(man, f, indent=1)
+        os.replace(tmp, OUT_VIZ_MANIFEST)     # atomic on one filesystem
+
+    def _viz_fields(vdir):
+        # name the EXACT dataset file carrying each array: dolfinx's
+        # '<name>.vtu' is a collection INDEX and, when write_mesh() was
+        # used, the first numbered piece set is mesh-only - the reader
+        # must not have to guess (see _viz_field_file)
+        fields = {}
+        for base, arr in (("velocity", "velocity"),
+                          ("pressure", "pressure"), ("zones", "zone")):
+            path = _viz_field_file(vdir, base)
+            if path:
+                fields[base] = {"file": path, "array": arr}
+        return fields
+
+    def viz_export(step, t_sim):
+        from dolfinx.io import VTKFile
+        if not viz_state:                    # lazy one-time P1/DG0 setup
+            Vv = fem.functionspace(msh, ("Lagrange", 1,
+                                         (2 if two_d else 3,)))
+            fu = fem.Function(Vv); fu.name = "velocity"
+            Q0v = fem.functionspace(msh, ("DG", 0))
+            zz = fem.Function(Q0v); zz.name = "zone"
+            for c, val in zip(cell_tags.indices, cell_tags.values):
+                zz.x.array[Q0v.dofmap.cell_dofs(c)[0]] = val
+            p_n.name = "pressure"
+            viz_state.update(u=fu, zone=zz)
+        viz_state["u"].interpolate(u_n)
+        vdir = f"{VIZ_DIR_PREFIX}{step:06d}"
+        ok = True
+        if rank == 0:
+            try:
+                os.makedirs(vdir, exist_ok=True)
+            except OSError:
+                ok = False
+        if not comm.bcast(ok, root=0):
+            return                # cannot export; the solve carries on
+        try:
+            # collective writes: a rank-LOCAL failure here cannot be
+            # handled without risking a collective mismatch, so (like the
+            # final export) only uniform failures are survivable - the
+            # realistic ones (permissions, missing dir) were caught above
+            for base, func in (("velocity", viz_state["u"]),
+                               ("pressure", p_n),
+                               ("zones", viz_state["zone"])):
+                with VTKFile(comm, os.path.join(vdir, base + ".vtu"),
+                             "w") as vtk:
+                    vtk.write_function(func)
+            comm.Barrier()        # every rank's pieces on disk BEFORE the
+        except Exception:         # manifest may name them
+            return
+        if rank != 0:
+            return
+        try:
+            _write_viz_manifest({
+                "type": "viz", "step": step, "steps": n_steps, "t": t_sim,
+                "dt": dt, "engine": engine, "cells": int(n_cells),
+                "dir": vdir, "fields": _viz_fields(vdir), "done": False})
+            viz_dirs.append(vdir)
+            while len(viz_dirs) > VIZ_KEEP_DIRS:
+                shutil.rmtree(viz_dirs.pop(0), ignore_errors=True)
+        except OSError:
+            pass                  # viewer starves; the solve carries on
+
     if rank == 0:
         print(f" [worker] mesh ready: {n_cells:,} elements "
               f"(estimate was ~{n_est:,.0f}; {time.time() - t_wall:.0f}s); "
               "time-stepping...")
+        if two_d:
+            print(f" [worker] engine=2d cell count: {n_cells:,} triangles")
 
     for step in range(n_steps):
         scale = min(1.0, (step + 1) / RAMP_STEPS)   # fan startup ramp
@@ -1621,8 +2164,16 @@ def worker_main(args):
         t_sim = (step + 1) * dt
         qf = comm.allreduce(fem.assemble_scalar(flux_front), op=MPI.SUM)
         qo = comm.allreduce(fem.assemble_scalar(flux_out), op=MPI.SUM)
+        if two_d:
+            # planar line flux [m^2/s] -> volumetric equivalent [m^3/s]
+            # (uniform-over-height assumption) so the streamed q_front/
+            # q_out keep the 3-D engine's units
+            qf *= H
+            qo *= H
         if (step + 1) % SEND_EVERY == 0 or step == n_steps - 1:
             sample_and_send(step + 1, t_sim, qf, qo)
+        if viz_every and (step + 1) % viz_every == 0:
+            viz_export(step + 1, t_sim)
         if rank == 0 and sock is None and (step + 1) % 10 == 0:
             print(f" [worker] t={t_sim:6.1f}s step {step+1}/{n_steps} "
                   f"q_out={qo:.4f} m^3/s ({qo * M3S_TO_CFM:.1f} CFM)")
@@ -1645,8 +2196,13 @@ def worker_main(args):
     dxs = np.linspace(0.02, W - 0.02, 18)
     dys = np.linspace(0.15 * H, 0.85 * H, 6)
     dzs = np.linspace(rz0, L - 0.005, 10)
-    pts_dz = np.array([[x, y, z] for x in dxs for y in dys for z in dzs])
-    dz_vals = eval_at_points_parallel(msh, u_n, pts_dz, 3)
+    if two_d:      # the domain IS y = H/2: the deadzone scan is the x-z grid
+        pts_dz = np.array([[x, z, 0.0] for x in dxs for z in dzs])
+        dz_vals = eval_at_points_parallel(msh, u_n, pts_dz, 2)
+    else:
+        pts_dz = np.array([[x, y, z] for x in dxs for y in dys
+                           for z in dzs])
+        dz_vals = eval_at_points_parallel(msh, u_n, pts_dz, 3)
 
     # component airflow PROXIES for the IT telemetry checks:
     #   CPU    = mean |u| sampled INSIDE each porous heatsink block
@@ -1658,13 +2214,20 @@ def worker_main(args):
     def box_mean_speed(b, inflate=0.0, n=(8, 5, 6)):
         x0 = max(0.005, b[0] - inflate)
         x1 = min(W - 0.005, b[3] + inflate)
-        y0 = max(0.003, b[1] - inflate)
-        y1 = min(H - 0.003, b[4] + inflate)
-        pts = np.array([[x, y, z]
-                        for x in np.linspace(x0, x1, n[0])
-                        for y in np.linspace(y0, y1, n[1])
-                        for z in np.linspace(b[2], b[5], n[2])])
-        vals = eval_at_points_parallel(msh, u_n, pts, 3)
+        if two_d:
+            # project the query box to its x-z rectangle in the plane
+            pts = np.array([[x, z, 0.0]
+                            for x in np.linspace(x0, x1, n[0])
+                            for z in np.linspace(b[2], b[5], n[2])])
+            vals = eval_at_points_parallel(msh, u_n, pts, 2)
+        else:
+            y0 = max(0.003, b[1] - inflate)
+            y1 = min(H - 0.003, b[4] + inflate)
+            pts = np.array([[x, y, z]
+                            for x in np.linspace(x0, x1, n[0])
+                            for y in np.linspace(y0, y1, n[1])
+                            for z in np.linspace(b[2], b[5], n[2])])
+            vals = eval_at_points_parallel(msh, u_n, pts, 3)
         if rank != 0:
             return None
         sp = np.linalg.norm(vals, axis=1)
@@ -1676,19 +2239,27 @@ def worker_main(args):
     components = []
     labels = geo["labels"]
     for name, b, _k, _c in geo["cpus"]:
+        if two_d and not _midplane_hit(b, H):
+            continue              # component absent from the 2-D slice
         components.append(("cpu", labels.get(name) or _block_label(name),
                            box_mean_speed(b)))
     for name, b in geo["solids"]:
         kind = geo["solid_telem"].get(name)
-        if kind is None and name.startswith("pcie"):
+        # cards only ("pcie_card_N"): riser cages are chassis mechanics,
+        # not GPUs - they must not join the GPU airflow threshold check
+        if kind is None and name.startswith("pcie_card_"):
             kind = "gpu"
         if kind:
+            if two_d and not _midplane_hit(b, H):
+                continue          # component absent from the 2-D slice
             components.append((kind, labels.get(name)
                                or f"GPU {name.rsplit('_', 1)[-1]}",
                                box_mean_speed(b, inflate=0.01)))
     have_optics = False
     for z in geo["extra_porous"]:
         if z["telemetry"]:
+            if two_d and not _midplane_hit(z["box"], H):
+                continue          # zone absent from the 2-D slice
             components.append((z["telemetry"],
                                labels.get(z["name"], z["name"]),
                                box_mean_speed(z["box"])))
@@ -1701,19 +2272,39 @@ def worker_main(args):
 
     qf = comm.allreduce(fem.assemble_scalar(flux_front), op=MPI.SUM)
     qo = comm.allreduce(fem.assemble_scalar(flux_out), op=MPI.SUM)
+    if two_d:
+        qf *= H               # line flux -> volumetric equivalent, as in
+        qo *= H               # the time loop (uniform-over-height)
 
     if rank == 0:
         p_min, p_at = min(all_mins, key=lambda mp: mp[0])
         speeds = np.linalg.norm(dz_vals, axis=1)
         ok = ~np.isnan(speeds)
         j = int(np.argmin(speeds[ok]))
+        dz_at = pts_dz[ok][j]
+        if two_d:
+            # planar coordinates are (x, z, 0); report the PHYSICAL
+            # location (x, H/2, z) so the summary semantics match 3-D
+            p_at = [p_at[0], 0.5 * H, p_at[1]]
+            dz_at = [dz_at[0], 0.5 * H, dz_at[1]]
         summary = {
             "type": "summary",
+            "engine": engine,
             "q_out": qo, "q_front": qf, "q_fan": fan_vz * area,
             "fan_vz": fan_vz, "fan_op_cfm": q_op * M3S_TO_CFM,
+            # fan-duty / affinity telemetry (all PER-FAN, duty-scaled;
+            # None where the fan config has no rating - custom fans):
+            # the acoustics/power table combines them with fan_count
+            "fan_duty": fan_op["duty"],
+            "fan_rpm_rated": fan_op["rpm_rated"],
+            "fan_rpm_scaled": fan_op["rpm"],
+            "fan_cfm_scaled": fan_op["cfm_max"],
+            "fan_mmh2o_scaled": fan_op["mmh2o_max"],
+            "fan_watts_scaled": fan_op["watts"],
+            "fan_dba_scaled": fan_op["dba"],
             "p_min": p_min, "p_min_at": [round(c, 3) for c in p_at],
             "dz_min": float(speeds[ok][j]),
-            "dz_min_at": [round(float(c), 3) for c in pts_dz[ok][j]],
+            "dz_min_at": [round(float(c), 3) for c in dz_at],
             "dz_mean": float(speeds[ok].mean()),
             "components": components,
             "mesh_level": mesh_level,
@@ -1729,7 +2320,7 @@ def worker_main(args):
 
     # ---- VTU export (always, even if the UI died) ---------------------------
     from dolfinx.io import VTKFile
-    V1 = fem.functionspace(msh, ("Lagrange", 1, (3,)))
+    V1 = fem.functionspace(msh, ("Lagrange", 1, (2 if two_d else 3,)))
     u_out = fem.Function(V1); u_out.name = "velocity"; u_out.interpolate(u_n)
     p_n.name = "pressure"
     Q0 = fem.functionspace(msh, ("DG", 0))
@@ -1741,6 +2332,18 @@ def worker_main(args):
         with VTKFile(comm, path, "w") as vtk:
             vtk.write_mesh(msh)
             vtk.write_function(func)
+    if viz_every and rank == 0:
+        try:
+            # final manifest: point the viewer at the FULL final export in
+            # the working directory and mark the run done. Same atomic
+            # replace; the last viz_step dirs stay for late readers.
+            _write_viz_manifest({
+                "type": "viz", "step": n_steps, "steps": n_steps,
+                "t": n_steps * dt, "dt": dt, "engine": engine,
+                "cells": int(n_cells), "dir": ".",
+                "fields": _viz_fields("."), "done": True})
+        except OSError:
+            pass
     if rank == 0:
         print(" [worker] VTU fields written (velocity/pressure/zones)")
         send({"type": "end"})
