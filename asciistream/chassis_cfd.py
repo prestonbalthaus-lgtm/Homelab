@@ -259,6 +259,7 @@
 ================================================================================
 """
 
+import glob
 import io
 import json
 import os
@@ -393,6 +394,34 @@ VIZ_KEEP_DIRS    = 2     # current + previous (a slow reader may still hold
 # stays byte-identical to the pre-dual-engine behaviour.
 VIEWER_READY_FILE = ".asciistream_viewer_ready"
 VIZ_EVERY_DEFAULT = 5    # steps between exports when a viewer IS attached
+
+# --- JIT form cache + compile flags -------------------------------------------
+# dolfinx reads these from `Path.cwd()/dolfinx_jit_options.json` (see
+# dolfinx.jit._load_options), and cwd is the bind-mounted /work, so writing
+# that file is the documented way to set them without touching all 14
+# fem.form() call sites.
+#
+# THE POINT: cache_dir defaults to ~/.cache/fenics INSIDE the container, and
+# run.sh starts the container with --rm. The compiled forms were therefore
+# thrown away on every exit and recompiled from scratch on every run. Moving
+# the cache onto the mount makes it survive, which is the whole of the
+# "startup is slow" complaint - the compile itself was already -O2.
+JIT_OPTIONS_FILE = "dolfinx_jit_options.json"
+JIT_CACHE_DIRNAME = ".jit-cache"     # under the work dir => on the host
+# Overridable so the flag set can be A/B benchmarked without editing code
+# (ASCIISTREAM_JIT_ARGS="-O3 -march=native"). Defaults to -O3 -g0: one step
+# up from dolfinx's own -O2 -g0, with no numerics or portability risk.
+# -ffast-math and -march=native are deliberately NOT default: the first
+# permits reassociation and assumes no NaN/Inf in a solver that divides by
+# flow quantities, the second bakes host CPU features into a cache that is
+# now shared across runs.
+JIT_ARGS_DEFAULT = ["-O3", "-g0"]
+
+# Regenerated solver output. Wiped at worker startup so a short run cannot
+# sit in a directory still holding a previous longer run's pieces.
+STALE_OUTPUT_GLOBS = ("*.vtu", "*.pvtu", "*.h5", "*.xdmf",
+                      OUT_VIZ_MANIFEST, OUT_VIZ_MANIFEST + ".tmp",
+                      VIZ_DIR_PREFIX + "*")
 
 # --- Fan affinity laws (worker args key "fan_duty" = N/N_rated) ---------------
 # Q ~ N, dP ~ N^2, shaft power ~ N^3, dBA ~ dBA_rated + 50*log10(N/N_rated).
@@ -2557,6 +2586,71 @@ def _viz_geometry(geo):
     }
 
 
+def jit_compile_args():
+    """Extra C compiler args for the form compiler.
+
+    ASCIISTREAM_JIT_ARGS overrides (space separated) so a flag set can be
+    benchmarked without a code change. Empty string = dolfinx's own
+    default, i.e. opt out entirely."""
+    env = os.environ.get("ASCIISTREAM_JIT_ARGS")
+    if env is None:
+        return list(JIT_ARGS_DEFAULT)
+    return [a for a in env.split() if a]
+
+
+def write_jit_options(workdir="."):
+    """Point dolfinx's form cache at a PERSISTENT directory and set the
+    compile flags, by writing `dolfinx_jit_options.json` into the work dir.
+
+    Must run before the first fem.form() in the process: dolfinx caches the
+    loaded options with functools.cache, so a file written later is ignored.
+
+    Returns the cache directory, or None if the options file could not be
+    written (the solve then just runs on dolfinx defaults - a slower start
+    is not worth aborting a run over)."""
+    cache = os.path.abspath(os.path.join(workdir, JIT_CACHE_DIRNAME))
+    opts = {"cache_dir": cache, "cffi_extra_compile_args": jit_compile_args()}
+    path = os.path.join(workdir, JIT_OPTIONS_FILE)
+    try:
+        os.makedirs(cache, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(opts, f, indent=1)
+        os.replace(tmp, path)          # atomic: ranks may read concurrently
+        return cache
+    except OSError:
+        return None
+
+
+def clean_stale_outputs(workdir="."):
+    """Delete regenerated solver output left by PREVIOUS runs.
+
+    Why this matters beyond tidiness: the field files are resolved by
+    LISTING a directory (see _viz_field_file), and the export directories
+    are pruned by a ring buffer that only tracks what the CURRENT run
+    created. So a directory still holding a longer previous run's pieces or
+    viz_step_* directories is a directory where a later, shorter run can
+    be read alongside stale data. Starting from a clean slate removes that
+    whole class of problem instead of trying to reason about it.
+
+    Only ever removes the tool's own regenerated artifacts - the patterns
+    are exactly what .gitignore already lists as disposable. Never touches
+    the config, the report .txt files, or anything a user authored.
+    Returns the number of entries removed."""
+    removed = 0
+    for pattern in STALE_OUTPUT_GLOBS:
+        for p in glob.glob(os.path.join(workdir, pattern)):
+            try:
+                if os.path.isdir(p) and not os.path.islink(p):
+                    shutil.rmtree(p)
+                else:
+                    os.unlink(p)
+                removed += 1
+            except OSError:
+                pass               # a locked/vanished file is not fatal
+    return removed
+
+
 def worker_main(args):
     """--worker mode: parametric mesh + transient IPCS solve + streaming."""
     from mpi4py import MPI
@@ -2569,6 +2663,26 @@ def worker_main(args):
     comm = MPI.COMM_WORLD
     rank = comm.rank
     t_wall = time.time()
+
+    # Startup hygiene, rank 0 then a barrier so every rank sees the result
+    # before the first form is built (dolfinx caches its JIT options on
+    # first use, so the file has to exist by then) and before any rank
+    # writes output into a directory another rank is still clearing.
+    if rank == 0:
+        n_stale = clean_stale_outputs(".")
+        jit_cache = write_jit_options(".")
+        if n_stale:
+            print(f" [worker] cleared {n_stale} stale output file(s)/dir(s) "
+                  "from a previous run")
+        if jit_cache:
+            fresh = not os.listdir(jit_cache)
+            print(f" [worker] JIT form cache: {jit_cache} "
+                  f"({'cold - forms will compile' if fresh else 'warm'}; "
+                  f"args {' '.join(jit_compile_args()) or 'dolfinx default'})")
+        else:
+            print(" [worker] could not write JIT options - running on "
+                  "dolfinx defaults (ephemeral cache, slower start)")
+    comm.Barrier()
 
     # rank 0 reads (and possibly auto-writes) the config; others receive it
     cfg = comm.bcast(load_config(args["config"]) if rank == 0 else None, root=0)
@@ -3272,6 +3386,38 @@ def worker_main(args):
 
         p_n.x.array[:] = p_n.x.array + phi.x.array
         p_n.x.scatter_forward()
+
+        # --- divergence / solver-failure guard -------------------------
+        # Two things used to pass silently: a blown-up field (no finite
+        # check anywhere) and a linear solve that never converged (PETSc's
+        # converged reason was never read). Either produces a plausible
+        # looking but meaningless run report.
+        #
+        # This also underwrites the optional -ffast-math build: that flag
+        # lets the compiler assume no NaN/Inf, which erodes the very
+        # signal a reader would otherwise use to spot a diverged solve.
+        # Checking explicitly restores it. Cost is an array scan plus one
+        # small allreduce per step - negligible beside three linear solves.
+        bad_reason = next(
+            (nm for nm, ksp in (("tentative velocity", s1),
+                                ("pressure Poisson", s2),
+                                ("velocity correction", s3))
+             if ksp.getConvergedReason() < 0), None)
+        finite = bool(np.isfinite(u_n.x.array).all()
+                      and np.isfinite(p_n.x.array).all())
+        ok = comm.allreduce(1 if (finite and bad_reason is None) else 0,
+                            op=MPI.MIN)
+        if not ok:
+            why = comm.allreduce(bad_reason or ("non-finite field"
+                                                if not finite else ""),
+                                 op=MPI.MAX) or "unknown"
+            if rank == 0:
+                print(f" [worker] SOLVE FAILED at step {step + 1}: {why}. "
+                      "The remaining output would be meaningless, so the "
+                      "run stops here. Try a smaller --dt, a coarser "
+                      "--mesh, or a lower --fan-duty.")
+            send({"type": "error", "step": step + 1, "reason": str(why)})
+            raise SystemExit(f"solver diverged at step {step + 1}: {why}")
 
         if thermal:
             # step 4: energy equation. Mixing plane first: the downstream
@@ -5211,6 +5357,52 @@ def launcher_wizard(console, cfg, config_path):
             "thermal": thermal, "dba_target": dba_target}
 
 
+def reap_worker_pool(proc, console=None, term_timeout=10.0,
+                     kill_timeout=5.0):
+    """Terminate the mpiexec worker pool and ACTUALLY reap it.
+
+    `proc.terminate()` alone leaves a zombie until the launcher itself
+    exits: the child is dead but its exit status is never collected. One
+    teardown path did exactly that - the "worker never connected" timeout
+    terminated and returned without waiting - so a run that timed out left
+    the pool behind. Both paths now come through here.
+
+    Escalates rather than trusting SIGTERM: mpiexec forwards the signal to
+    its ranks, but a rank wedged inside a PETSc solve or an MPI collective
+    can ignore it, and a bare `wait()` would then block the launcher
+    forever. SIGTERM, wait, then SIGKILL, then wait again. Returns the
+    exit status, or None if even SIGKILL did not land (should not happen;
+    reported rather than hidden).
+
+    Safe to call twice - a already-reaped process just returns its status.
+    """
+    if proc is None:
+        return None
+    if proc.poll() is not None:
+        return proc.returncode
+    try:
+        proc.terminate()
+    except OSError:
+        pass
+    try:
+        return proc.wait(timeout=term_timeout)
+    except subprocess.TimeoutExpired:
+        pass
+    if console is not None:
+        console.print(" [yellow]worker pool ignored SIGTERM - killing[/]")
+    try:
+        proc.kill()
+    except OSError:
+        pass
+    try:
+        return proc.wait(timeout=kill_timeout)
+    except subprocess.TimeoutExpired:
+        if console is not None:
+            console.print(" [red]worker pool survived SIGKILL; it may be "
+                          "stuck in an uninterruptible MPI call[/]")
+        return None
+
+
 def detect_mpi_flags():
     """Launch flags for the worker pool, keyed off `mpiexec --version`.
 
@@ -5317,7 +5509,9 @@ def launcher_main(config_path):
     try:
         conn, _ = srv.accept()
     except socket.timeout:
-        proc.terminate()
+        # reap, do not just signal: this path used to terminate() and
+        # return, leaving the pool as a zombie for the launcher's lifetime
+        reap_worker_pool(proc, console)
         console.print("[red]worker never connected; last output:[/]")
         console.print("".join(list(out_tail)[-10:] + list(err_tail)[-10:]))
         return
@@ -5492,13 +5686,20 @@ def launcher_main(config_path):
                     time.sleep(1.0 / ANIM_FPS)
     except KeyboardInterrupt:
         console.print("\n [yellow]dashboard stopped - terminating worker[/]")
-        proc.terminate()
+        reap_worker_pool(proc, console)
     finally:
         keys_stop.set()
         if key_thr is not None:
             key_thr.join(timeout=1.0)
 
-    proc.wait(timeout=60)
+    # normal completion: the pool should already be exiting on its own, so
+    # give it a moment before escalating. reap_worker_pool is idempotent,
+    # so the Ctrl+C path above having already reaped is fine.
+    if proc.poll() is None:
+        try:
+            proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            reap_worker_pool(proc, console)
     if state["summary"]:
         summary = state["summary"]
         fan_cfg = params["fan_custom"] or cfg["fans"][params["fan"]]

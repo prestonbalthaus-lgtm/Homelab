@@ -11,6 +11,13 @@ viz_manifest.json
 viz_manifest.json.tmp
 .asciistream_viewer_ready
 
+# --- dolfinx JIT form cache + its options file (regenerated per run) ----------
+# The cache lives under the work dir on purpose: the container is --rm, so a
+# cache inside it would be discarded and every run would recompile.
+.jit-cache/
+dolfinx_jit_options.json
+dolfinx_jit_options.json.tmp
+
 # --- generated plots (chassis_fan_tool.py / plot_profile.py) -------------------
 pq_curves.png
 server_velocity_profile.png
