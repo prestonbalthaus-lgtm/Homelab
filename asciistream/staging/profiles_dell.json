@@ -1,0 +1,2101 @@
+{
+  "servers": {
+    "R610": {
+      "display_name": "Dell PowerEdge R610 (6-bay)",
+      "form_factor": "1U",
+      "chassis_width": 0.424,
+      "chassis_height": 0.0426,
+      "chassis_length": 0.737,
+      "fan_wall_z": 0.18,
+      "fan_count": 6,
+      "drive_bay_count": 6,
+      "drive_bay_type": "2.5in SFF",
+      "drive_bays_front": 6,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.12
+      ],
+      "drive_zeta": 90.0,
+      "drive_permeability": 4e-07,
+      "cpu_sockets": 2,
+      "cpu_zone_z": [
+        0.3,
+        0.4
+      ],
+      "cpu_zeta": 70.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 12,
+      "populated_pcie_slots": 2,
+      "pcie_zone_z": [
+        0.55,
+        0.65
+      ],
+      "pcie_x_band": [
+        0.1,
+        0.324
+      ],
+      "pcie_max_slots": 2,
+      "pcie_risers": [
+        {
+          "name": "riser_left",
+          "x": [
+            0.004,
+            0.016
+          ]
+        },
+        {
+          "name": "riser_right",
+          "x": [
+            0.408,
+            0.42
+          ]
+        }
+      ],
+      "heat_load": 250.0,
+      "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1 (fanless)",
+          "type": "porous",
+          "box": [
+            0.018,
+            0.004,
+            0.5,
+            0.08,
+            0.0386,
+            0.732
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2 (fanless)",
+          "type": "porous",
+          "box": [
+            0.344,
+            0.004,
+            0.5,
+            0.406,
+            0.0386,
+            0.732
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "R710": {
+      "display_name": "Dell PowerEdge R710 (8-bay)",
+      "form_factor": "2U",
+      "chassis_width": 0.4431,
+      "chassis_height": 0.0864,
+      "chassis_length": 0.6807,
+      "fan_wall_z": 0.19,
+      "fan_count": 5,
+      "drive_bay_count": 8,
+      "drive_bay_type": "2.5in SFF",
+      "drive_bays_front": 8,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.13
+      ],
+      "drive_zeta": 100.0,
+      "drive_permeability": 3.5e-07,
+      "cpu_sockets": 2,
+      "cpu_zone_z": [
+        0.32,
+        0.44
+      ],
+      "cpu_zeta": 55.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 18,
+      "populated_pcie_slots": 2,
+      "pcie_zone_z": [
+        0.52,
+        0.62
+      ],
+      "pcie_max_slots": 4,
+      "pcie_risers": [
+        {
+          "name": "riser_left",
+          "x": [
+            0.004,
+            0.016
+          ]
+        },
+        {
+          "name": "riser_right",
+          "x": [
+            0.427,
+            0.439
+          ]
+        }
+      ],
+      "heat_load": 300.0,
+      "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "porous",
+          "box": [
+            0.005,
+            0.006,
+            0.628,
+            0.08,
+            0.08,
+            0.675
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "porous",
+          "box": [
+            0.363,
+            0.006,
+            0.628,
+            0.438,
+            0.08,
+            0.675
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "R620": {
+      "display_name": "Dell PowerEdge R620 (10-bay)",
+      "form_factor": "1U",
+      "chassis_width": 0.434,
+      "chassis_height": 0.0428,
+      "chassis_length": 0.731,
+      "fan_wall_z": 0.18,
+      "fan_count": 7,
+      "drive_bay_count": 10,
+      "drive_bay_type": "2.5in SFF",
+      "drive_bays_front": 10,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.13
+      ],
+      "drive_zeta": 110.0,
+      "drive_permeability": 3e-07,
+      "cpu_sockets": 2,
+      "cpu_zone_z": [
+        0.3,
+        0.4
+      ],
+      "cpu_zeta": 70.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 24,
+      "populated_pcie_slots": 2,
+      "pcie_zone_z": [
+        0.55,
+        0.65
+      ],
+      "pcie_x_band": [
+        0.1,
+        0.334
+      ],
+      "pcie_max_slots": 3,
+      "pcie_risers": [
+        {
+          "name": "riser_left",
+          "x": [
+            0.004,
+            0.016
+          ]
+        },
+        {
+          "name": "riser_right",
+          "x": [
+            0.418,
+            0.43
+          ]
+        }
+      ],
+      "heat_load": 280.0,
+      "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "porous",
+          "box": [
+            0.018,
+            0.004,
+            0.48,
+            0.08,
+            0.0388,
+            0.726
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "porous",
+          "box": [
+            0.354,
+            0.004,
+            0.48,
+            0.416,
+            0.0388,
+            0.726
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "R720": {
+      "display_name": "Dell PowerEdge R720 (16-bay)",
+      "form_factor": "2U",
+      "chassis_width": 0.444,
+      "chassis_height": 0.0873,
+      "chassis_length": 0.684,
+      "fan_wall_z": 0.19,
+      "fan_count": 6,
+      "drive_bay_count": 16,
+      "drive_bay_type": "2.5in SFF",
+      "drive_bays_front": 16,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.135
+      ],
+      "drive_zeta": 120.0,
+      "drive_permeability": 3e-07,
+      "cpu_sockets": 2,
+      "cpu_zone_z": [
+        0.32,
+        0.44
+      ],
+      "cpu_zeta": 55.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 24,
+      "populated_pcie_slots": 3,
+      "pcie_zone_z": [
+        0.53,
+        0.63
+      ],
+      "pcie_max_slots": 7,
+      "pcie_risers": [
+        {
+          "name": "riser_left",
+          "x": [
+            0.004,
+            0.016
+          ]
+        },
+        {
+          "name": "riser_right",
+          "x": [
+            0.428,
+            0.44
+          ]
+        }
+      ],
+      "heat_load": 350.0,
+      "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "porous",
+          "box": [
+            0.005,
+            0.006,
+            0.635,
+            0.08,
+            0.081,
+            0.679
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "porous",
+          "box": [
+            0.364,
+            0.006,
+            0.635,
+            0.439,
+            0.081,
+            0.679
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "R630": {
+      "display_name": "Dell PowerEdge R630 (10-bay)",
+      "form_factor": "1U",
+      "chassis_width": 0.434,
+      "chassis_height": 0.0428,
+      "chassis_length": 0.731,
+      "fan_wall_z": 0.18,
+      "fan_count": 7,
+      "drive_bay_count": 10,
+      "drive_bay_type": "2.5in SFF",
+      "drive_bays_front": 10,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.13
+      ],
+      "drive_zeta": 110.0,
+      "drive_permeability": 3e-07,
+      "cpu_sockets": 2,
+      "cpu_zone_z": [
+        0.3,
+        0.4
+      ],
+      "cpu_zeta": 70.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 24,
+      "populated_pcie_slots": 2,
+      "pcie_zone_z": [
+        0.55,
+        0.65
+      ],
+      "pcie_x_band": [
+        0.1,
+        0.334
+      ],
+      "pcie_max_slots": 3,
+      "pcie_risers": [
+        {
+          "name": "riser_left",
+          "x": [
+            0.004,
+            0.016
+          ]
+        },
+        {
+          "name": "riser_right",
+          "x": [
+            0.418,
+            0.43
+          ]
+        }
+      ],
+      "heat_load": 300.0,
+      "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "porous",
+          "box": [
+            0.018,
+            0.004,
+            0.48,
+            0.08,
+            0.0388,
+            0.726
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "porous",
+          "box": [
+            0.354,
+            0.004,
+            0.48,
+            0.416,
+            0.0388,
+            0.726
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "R730": {
+      "display_name": "Dell PowerEdge R730 (16-bay)",
+      "form_factor": "2U",
+      "chassis_width": 0.444,
+      "chassis_height": 0.0873,
+      "chassis_length": 0.684,
+      "fan_wall_z": 0.19,
+      "fan_count": 6,
+      "drive_bay_count": 16,
+      "drive_bay_type": "2.5in SFF",
+      "drive_bays_front": 16,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.135
+      ],
+      "drive_zeta": 120.0,
+      "drive_permeability": 3e-07,
+      "cpu_sockets": 2,
+      "cpu_zone_z": [
+        0.32,
+        0.44
+      ],
+      "cpu_zeta": 55.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 24,
+      "populated_pcie_slots": 3,
+      "pcie_zone_z": [
+        0.53,
+        0.63
+      ],
+      "pcie_max_slots": 7,
+      "pcie_risers": [
+        {
+          "name": "riser_left",
+          "x": [
+            0.004,
+            0.016
+          ]
+        },
+        {
+          "name": "riser_right",
+          "x": [
+            0.428,
+            0.44
+          ]
+        }
+      ],
+      "heat_load": 380.0,
+      "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "porous",
+          "box": [
+            0.005,
+            0.006,
+            0.635,
+            0.08,
+            0.081,
+            0.679
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "porous",
+          "box": [
+            0.364,
+            0.006,
+            0.635,
+            0.439,
+            0.081,
+            0.679
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "R730xd": {
+      "display_name": "Dell PowerEdge R730xd (24+2 bay)",
+      "form_factor": "2U",
+      "chassis_width": 0.444,
+      "chassis_height": 0.0873,
+      "chassis_length": 0.684,
+      "fan_wall_z": 0.2,
+      "fan_count": 6,
+      "drive_bay_count": 26,
+      "drive_bay_type": "2.5in SFF (24 front + 2 rear flex)",
+      "drive_bays_front": 24,
+      "drive_bays_rear": 2,
+      "drive_zone_z": [
+        0.02,
+        0.14
+      ],
+      "drive_zeta": 140.0,
+      "drive_permeability": 2.5e-07,
+      "cpu_sockets": 2,
+      "cpu_zone_z": [
+        0.32,
+        0.44
+      ],
+      "cpu_zeta": 55.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 24,
+      "populated_pcie_slots": 3,
+      "pcie_zone_z": [
+        0.53,
+        0.63
+      ],
+      "pcie_max_slots": 6,
+      "pcie_risers": [
+        {
+          "name": "riser_left",
+          "x": [
+            0.004,
+            0.016
+          ]
+        },
+        {
+          "name": "riser_right",
+          "x": [
+            0.428,
+            0.44
+          ]
+        }
+      ],
+      "heat_load": 400.0,
+      "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "porous",
+          "box": [
+            0.005,
+            0.006,
+            0.635,
+            0.08,
+            0.081,
+            0.679
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "porous",
+          "box": [
+            0.364,
+            0.006,
+            0.635,
+            0.439,
+            0.081,
+            0.679
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "rear_flex_bay",
+          "label": "Rear flex bay (2x 2.5in)",
+          "type": "porous",
+          "box": [
+            0.1,
+            0.02,
+            0.635,
+            0.334,
+            0.075,
+            0.678
+          ],
+          "zeta": 120.0,
+          "permeability": 3e-07
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "R530": {
+      "display_name": "Dell PowerEdge R530 (8x LFF)",
+      "form_factor": "2U",
+      "chassis_width": 0.434,
+      "chassis_height": 0.0868,
+      "chassis_length": 0.6467,
+      "fan_wall_z": 0.2,
+      "fan_count": 5,
+      "drive_bay_count": 8,
+      "drive_bay_type": "3.5in LFF",
+      "drive_bays_front": 8,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.14
+      ],
+      "drive_zeta": 120.0,
+      "drive_permeability": 3e-07,
+      "cpu_sockets": 2,
+      "cpu_zone_z": [
+        0.32,
+        0.43
+      ],
+      "cpu_zeta": 55.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 12,
+      "populated_pcie_slots": 2,
+      "pcie_zone_z": [
+        0.5,
+        0.6
+      ],
+      "pcie_max_slots": 5,
+      "pcie_risers": [
+        {
+          "name": "riser_left",
+          "x": [
+            0.004,
+            0.016
+          ]
+        },
+        {
+          "name": "riser_right",
+          "x": [
+            0.418,
+            0.43
+          ]
+        }
+      ],
+      "heat_load": 300.0,
+      "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "porous",
+          "box": [
+            0.005,
+            0.006,
+            0.605,
+            0.08,
+            0.081,
+            0.641
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "porous",
+          "box": [
+            0.354,
+            0.006,
+            0.605,
+            0.429,
+            0.081,
+            0.641
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "R930": {
+      "display_name": "Dell PowerEdge R930 (24-bay, 4-socket)",
+      "form_factor": "4U",
+      "chassis_width": 0.422,
+      "chassis_height": 0.1726,
+      "chassis_length": 0.8023,
+      "fan_wall_z": 0.3,
+      "fan_count": 6,
+      "drive_bay_count": 24,
+      "drive_bay_type": "2.5in SFF",
+      "drive_bays_front": 24,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.16
+      ],
+      "drive_zeta": 140.0,
+      "drive_permeability": 2.5e-07,
+      "cpu_sockets": 4,
+      "cpu_zone_z": [
+        0.38,
+        0.52
+      ],
+      "cpu_zeta": 50.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 96,
+      "populated_pcie_slots": 3,
+      "pcie_zone_z": [
+        0.6,
+        0.72
+      ],
+      "pcie_max_slots": 8,
+      "pcie_risers": [
+        {
+          "name": "riser_left",
+          "x": [
+            0.004,
+            0.016
+          ]
+        },
+        {
+          "name": "riser_right",
+          "x": [
+            0.406,
+            0.418
+          ]
+        }
+      ],
+      "heat_load": 900.0,
+      "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_bank_left",
+          "label": "PSU 1+2",
+          "type": "porous",
+          "box": [
+            0.005,
+            0.006,
+            0.73,
+            0.08,
+            0.1,
+            0.795
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_bank_right",
+          "label": "PSU 3+4",
+          "type": "porous",
+          "box": [
+            0.342,
+            0.006,
+            0.73,
+            0.417,
+            0.1,
+            0.795
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "R240": {
+      "display_name": "Dell PowerEdge R240 (4x LFF)",
+      "form_factor": "1U",
+      "chassis_width": 0.434,
+      "chassis_height": 0.0428,
+      "chassis_length": 0.5345,
+      "fan_wall_z": 0.16,
+      "fan_count": 4,
+      "drive_bay_count": 4,
+      "drive_bay_type": "3.5in LFF",
+      "drive_bays_front": 4,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.12
+      ],
+      "drive_zeta": 80.0,
+      "drive_permeability": 4.5e-07,
+      "cpu_sockets": 1,
+      "cpu_zone_z": [
+        0.24,
+        0.33
+      ],
+      "cpu_zeta": 70.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 4,
+      "populated_pcie_slots": 1,
+      "pcie_zone_z": [
+        0.38,
+        0.47
+      ],
+      "pcie_x_band": [
+        0.1,
+        0.41
+      ],
+      "pcie_max_slots": 2,
+      "pcie_risers": [],
+      "heat_load": 150.0,
+      "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU (cabled)",
+          "type": "porous",
+          "box": [
+            0.018,
+            0.004,
+            0.38,
+            0.08,
+            0.038,
+            0.52
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "R740": {
+      "display_name": "Dell PowerEdge R740 (16-bay)",
+      "form_factor": "2U",
+      "chassis_width": 0.434,
+      "chassis_height": 0.0868,
+      "chassis_length": 0.715,
+      "fan_wall_z": 0.2,
+      "fan_count": 6,
+      "drive_bay_count": 16,
+      "drive_bay_type": "2.5in SFF",
+      "drive_bays_front": 16,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.14
+      ],
+      "drive_zeta": 120.0,
+      "drive_permeability": 3e-07,
+      "cpu_sockets": 2,
+      "cpu_zone_z": [
+        0.34,
+        0.46
+      ],
+      "cpu_zeta": 55.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 24,
+      "populated_pcie_slots": 3,
+      "pcie_zone_z": [
+        0.55,
+        0.66
+      ],
+      "pcie_max_slots": 8,
+      "pcie_risers": [
+        {
+          "name": "riser_left",
+          "x": [
+            0.004,
+            0.016
+          ]
+        },
+        {
+          "name": "riser_right",
+          "x": [
+            0.418,
+            0.43
+          ]
+        }
+      ],
+      "heat_load": 400.0,
+      "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "porous",
+          "box": [
+            0.005,
+            0.006,
+            0.665,
+            0.08,
+            0.081,
+            0.71
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "porous",
+          "box": [
+            0.354,
+            0.006,
+            0.665,
+            0.429,
+            0.081,
+            0.71
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "R7425": {
+      "display_name": "Dell PowerEdge R7425 (24-bay, 2x EPYC)",
+      "form_factor": "2U",
+      "chassis_width": 0.434,
+      "chassis_height": 0.0868,
+      "chassis_length": 0.715,
+      "fan_wall_z": 0.2,
+      "fan_count": 6,
+      "drive_bay_count": 24,
+      "drive_bay_type": "2.5in SFF",
+      "drive_bays_front": 24,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.14
+      ],
+      "drive_zeta": 140.0,
+      "drive_permeability": 2.5e-07,
+      "cpu_sockets": 2,
+      "cpu_zone_z": [
+        0.34,
+        0.46
+      ],
+      "cpu_zeta": 55.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 32,
+      "populated_pcie_slots": 3,
+      "pcie_zone_z": [
+        0.55,
+        0.66
+      ],
+      "pcie_max_slots": 8,
+      "pcie_risers": [
+        {
+          "name": "riser_left",
+          "x": [
+            0.004,
+            0.016
+          ]
+        },
+        {
+          "name": "riser_right",
+          "x": [
+            0.418,
+            0.43
+          ]
+        }
+      ],
+      "heat_load": 450.0,
+      "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "porous",
+          "box": [
+            0.005,
+            0.006,
+            0.665,
+            0.08,
+            0.081,
+            0.71
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "porous",
+          "box": [
+            0.354,
+            0.006,
+            0.665,
+            0.429,
+            0.081,
+            0.71
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "R940": {
+      "display_name": "Dell PowerEdge R940 (24-bay, 4-socket)",
+      "form_factor": "3U",
+      "chassis_width": 0.434,
+      "chassis_height": 0.1303,
+      "chassis_length": 0.7842,
+      "fan_wall_z": 0.22,
+      "fan_count": 8,
+      "drive_bay_count": 24,
+      "drive_bay_type": "2.5in SFF",
+      "drive_bays_front": 24,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.15
+      ],
+      "drive_zeta": 140.0,
+      "drive_permeability": 2.5e-07,
+      "cpu_sockets": 4,
+      "cpu_zone_z": [
+        0.36,
+        0.5
+      ],
+      "cpu_zeta": 50.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 48,
+      "populated_pcie_slots": 3,
+      "pcie_zone_z": [
+        0.58,
+        0.7
+      ],
+      "pcie_max_slots": 8,
+      "pcie_risers": [
+        {
+          "name": "riser_left",
+          "x": [
+            0.004,
+            0.016
+          ]
+        },
+        {
+          "name": "riser_right",
+          "x": [
+            0.418,
+            0.43
+          ]
+        }
+      ],
+      "heat_load": 800.0,
+      "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "porous",
+          "box": [
+            0.005,
+            0.006,
+            0.71,
+            0.08,
+            0.065,
+            0.775
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "porous",
+          "box": [
+            0.354,
+            0.006,
+            0.71,
+            0.429,
+            0.065,
+            0.775
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "R650": {
+      "display_name": "Dell PowerEdge R650 (10-bay)",
+      "form_factor": "1U",
+      "chassis_width": 0.434,
+      "chassis_height": 0.0428,
+      "chassis_length": 0.7515,
+      "fan_wall_z": 0.18,
+      "fan_count": 8,
+      "drive_bay_count": 10,
+      "drive_bay_type": "2.5in SFF",
+      "drive_bays_front": 10,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.13
+      ],
+      "drive_zeta": 110.0,
+      "drive_permeability": 3e-07,
+      "cpu_sockets": 2,
+      "cpu_zone_z": [
+        0.3,
+        0.41
+      ],
+      "cpu_zeta": 70.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 32,
+      "populated_pcie_slots": 2,
+      "pcie_zone_z": [
+        0.55,
+        0.65
+      ],
+      "pcie_x_band": [
+        0.1,
+        0.334
+      ],
+      "pcie_max_slots": 3,
+      "pcie_risers": [
+        {
+          "name": "riser_left",
+          "x": [
+            0.004,
+            0.016
+          ]
+        },
+        {
+          "name": "riser_right",
+          "x": [
+            0.418,
+            0.43
+          ]
+        }
+      ],
+      "heat_load": 400.0,
+      "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "porous",
+          "box": [
+            0.018,
+            0.004,
+            0.5,
+            0.08,
+            0.0388,
+            0.746
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "porous",
+          "box": [
+            0.354,
+            0.004,
+            0.5,
+            0.416,
+            0.0388,
+            0.746
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "R6515": {
+      "display_name": "Dell PowerEdge R6515 (10-bay, 1x EPYC)",
+      "form_factor": "1U",
+      "chassis_width": 0.434,
+      "chassis_height": 0.0428,
+      "chassis_length": 0.6572,
+      "fan_wall_z": 0.17,
+      "fan_count": 6,
+      "drive_bay_count": 10,
+      "drive_bay_type": "2.5in SFF",
+      "drive_bays_front": 10,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.12
+      ],
+      "drive_zeta": 110.0,
+      "drive_permeability": 3e-07,
+      "cpu_sockets": 1,
+      "cpu_zone_z": [
+        0.28,
+        0.38
+      ],
+      "cpu_zeta": 70.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 16,
+      "populated_pcie_slots": 1,
+      "pcie_zone_z": [
+        0.48,
+        0.58
+      ],
+      "pcie_x_band": [
+        0.1,
+        0.334
+      ],
+      "pcie_max_slots": 2,
+      "pcie_risers": [
+        {
+          "name": "riser_left",
+          "x": [
+            0.004,
+            0.016
+          ]
+        },
+        {
+          "name": "riser_right",
+          "x": [
+            0.418,
+            0.43
+          ]
+        }
+      ],
+      "heat_load": 250.0,
+      "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "porous",
+          "box": [
+            0.018,
+            0.004,
+            0.44,
+            0.08,
+            0.0388,
+            0.652
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "porous",
+          "box": [
+            0.354,
+            0.004,
+            0.44,
+            0.416,
+            0.0388,
+            0.652
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "R6525": {
+      "display_name": "Dell PowerEdge R6525 (10-bay, 2x EPYC)",
+      "form_factor": "1U",
+      "chassis_width": 0.434,
+      "chassis_height": 0.0428,
+      "chassis_length": 0.7515,
+      "fan_wall_z": 0.18,
+      "fan_count": 8,
+      "drive_bay_count": 10,
+      "drive_bay_type": "2.5in SFF",
+      "drive_bays_front": 10,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.13
+      ],
+      "drive_zeta": 110.0,
+      "drive_permeability": 3e-07,
+      "cpu_sockets": 2,
+      "cpu_zone_z": [
+        0.3,
+        0.41
+      ],
+      "cpu_zeta": 70.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 32,
+      "populated_pcie_slots": 2,
+      "pcie_zone_z": [
+        0.55,
+        0.65
+      ],
+      "pcie_x_band": [
+        0.1,
+        0.334
+      ],
+      "pcie_max_slots": 3,
+      "pcie_risers": [
+        {
+          "name": "riser_left",
+          "x": [
+            0.004,
+            0.016
+          ]
+        },
+        {
+          "name": "riser_right",
+          "x": [
+            0.418,
+            0.43
+          ]
+        }
+      ],
+      "heat_load": 450.0,
+      "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "porous",
+          "box": [
+            0.018,
+            0.004,
+            0.5,
+            0.08,
+            0.0388,
+            0.746
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "porous",
+          "box": [
+            0.354,
+            0.004,
+            0.5,
+            0.416,
+            0.0388,
+            0.746
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "R750": {
+      "display_name": "Dell PowerEdge R750 (16-bay)",
+      "form_factor": "2U",
+      "chassis_width": 0.434,
+      "chassis_height": 0.0868,
+      "chassis_length": 0.7007,
+      "fan_wall_z": 0.2,
+      "fan_count": 6,
+      "drive_bay_count": 16,
+      "drive_bay_type": "2.5in SFF",
+      "drive_bays_front": 16,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.14
+      ],
+      "drive_zeta": 120.0,
+      "drive_permeability": 3e-07,
+      "cpu_sockets": 2,
+      "cpu_zone_z": [
+        0.34,
+        0.46
+      ],
+      "cpu_zeta": 55.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 32,
+      "populated_pcie_slots": 3,
+      "pcie_zone_z": [
+        0.54,
+        0.65
+      ],
+      "pcie_max_slots": 8,
+      "pcie_risers": [
+        {
+          "name": "riser_left",
+          "x": [
+            0.004,
+            0.016
+          ]
+        },
+        {
+          "name": "riser_right",
+          "x": [
+            0.418,
+            0.43
+          ]
+        }
+      ],
+      "heat_load": 500.0,
+      "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "porous",
+          "box": [
+            0.005,
+            0.006,
+            0.655,
+            0.08,
+            0.081,
+            0.696
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "porous",
+          "box": [
+            0.354,
+            0.006,
+            0.655,
+            0.429,
+            0.081,
+            0.696
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "R7515": {
+      "display_name": "Dell PowerEdge R7515 (12x LFF, 1x EPYC)",
+      "form_factor": "2U",
+      "chassis_width": 0.434,
+      "chassis_height": 0.0868,
+      "chassis_length": 0.6471,
+      "fan_wall_z": 0.19,
+      "fan_count": 6,
+      "drive_bay_count": 12,
+      "drive_bay_type": "3.5in LFF",
+      "drive_bays_front": 12,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.14
+      ],
+      "drive_zeta": 150.0,
+      "drive_permeability": 2.2e-07,
+      "cpu_sockets": 1,
+      "cpu_zone_z": [
+        0.32,
+        0.44
+      ],
+      "cpu_zeta": 55.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 16,
+      "populated_pcie_slots": 2,
+      "pcie_zone_z": [
+        0.49,
+        0.6
+      ],
+      "pcie_max_slots": 8,
+      "pcie_risers": [
+        {
+          "name": "riser_left",
+          "x": [
+            0.004,
+            0.016
+          ]
+        },
+        {
+          "name": "riser_right",
+          "x": [
+            0.418,
+            0.43
+          ]
+        }
+      ],
+      "heat_load": 300.0,
+      "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "porous",
+          "box": [
+            0.005,
+            0.006,
+            0.602,
+            0.08,
+            0.081,
+            0.642
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "porous",
+          "box": [
+            0.354,
+            0.006,
+            0.602,
+            0.429,
+            0.081,
+            0.642
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    },
+    "R7625": {
+      "display_name": "Dell PowerEdge R7625 (16-bay, 2x EPYC)",
+      "form_factor": "2U",
+      "chassis_width": 0.434,
+      "chassis_height": 0.0868,
+      "chassis_length": 0.7583,
+      "fan_wall_z": 0.2,
+      "fan_count": 6,
+      "drive_bay_count": 16,
+      "drive_bay_type": "2.5in SFF",
+      "drive_bays_front": 16,
+      "drive_bays_rear": 0,
+      "drive_zone_z": [
+        0.02,
+        0.14
+      ],
+      "drive_zeta": 120.0,
+      "drive_permeability": 3e-07,
+      "cpu_sockets": 2,
+      "cpu_zone_z": [
+        0.35,
+        0.47
+      ],
+      "cpu_zeta": 55.0,
+      "cpu_permeability": 2e-07,
+      "total_dimm_slots": 24,
+      "populated_pcie_slots": 3,
+      "pcie_zone_z": [
+        0.57,
+        0.68
+      ],
+      "pcie_max_slots": 8,
+      "pcie_risers": [
+        {
+          "name": "riser_left",
+          "x": [
+            0.004,
+            0.016
+          ]
+        },
+        {
+          "name": "riser_right",
+          "x": [
+            0.418,
+            0.43
+          ]
+        }
+      ],
+      "heat_load": 700.0,
+      "baseline_zeta": 25.0,
+      "custom_zones": [
+        {
+          "name": "psu_1",
+          "label": "PSU 1",
+          "type": "porous",
+          "box": [
+            0.005,
+            0.006,
+            0.69,
+            0.08,
+            0.081,
+            0.753
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        },
+        {
+          "name": "psu_2",
+          "label": "PSU 2",
+          "type": "porous",
+          "box": [
+            0.354,
+            0.006,
+            0.69,
+            0.429,
+            0.081,
+            0.753
+          ],
+          "zeta": 200.0,
+          "permeability": 1e-07,
+          "fan_rpm": 15000,
+          "fan_size_mm": 40
+        }
+      ],
+      "mesh_settings": {
+        "coarse": {
+          "element_size_mm": 15.0
+        },
+        "medium": {
+          "element_size_mm": 8.0
+        },
+        "fine": {
+          "element_size_mm": 4.0
+        },
+        "ultra": {
+          "element_size_mm": 2.5
+        }
+      },
+      "requirements": {
+        "inlet_temp_c": 22.0,
+        "outlet_temp_max_c": 35.0,
+        "pressure_min_pa": -250.0,
+        "deadzone_speed_min_ms": 0.15,
+        "cpu_min_airflow_ms": 0.5,
+        "gpu_min_airflow_ms": 0.3,
+        "optics_min_airflow_ms": 0.2
+      }
+    }
+  }
+}

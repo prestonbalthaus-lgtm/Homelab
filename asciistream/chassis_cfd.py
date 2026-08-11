@@ -3768,6 +3768,25 @@ def build_geometry_canvas(geo, nrows, ncols):
             cv.stamp_text(r0, c0 + (c1 - c0 - 10) // 2, "[ DRIVES ]",
                           COL_LABEL)
 
+    # Discrete drive array: one dashed cage per POPULATED bay, so an
+    # under-populated front bay visibly reads as open air rather than as a
+    # full-width slab. Labels are whatever build_geometry assigned
+    # ("SSD 1" / "HDD 2"), stamped only where a bay is wide enough to hold
+    # the text - a 24-bay 2.5in front panel is a couple of columns per bay.
+    for _d in geo.get("drive_boxes") or []:
+        b = _d["box"]
+        r0, r1, c0, c1 = xr(b[0]), xr(b[3]), zc(b[2]), zc(b[5])
+        for c in range(c0, c1 + 1):
+            cv.put(r0, c, ".", dash, protect=True)
+            cv.put(r1, c, ".", dash, protect=True)
+        for r in range(r0, r1 + 1):
+            cv.put(r, c0, ":", dash, protect=True)
+            cv.put(r, c1, ":", dash, protect=True)
+        lbl = (geo.get("labels") or {}).get(_d["name"])
+        if lbl and c1 - c0 > len(lbl) + 3:
+            cv.stamp_text(r0, c0 + (c1 - c0 - len(lbl) - 2) // 2,
+                          f"[{lbl}]", COL_LABEL)
+
     for name, b, _k, _c in geo["cpus"]:
         stamp_box(b, name, solid=False)
     # impedance zones: bordered, not filled. y-stacked zones project onto
@@ -4065,6 +4084,10 @@ def build_chassis_iso_panel(speed, geo, vref, max_cols, max_rows,
     blocks = []
     if geo["drives"]:
         blocks.append((geo["drives"][1], "drive_array", False))
+    # discrete array: extrude each populated bay, so the isometric view and
+    # the text report show the same half-empty front bay the mesh solved
+    for _d in geo.get("drive_boxes") or []:
+        blocks.append((_d["box"], _d["name"], False))
     for name, b, _k, _c in geo["cpus"]:
         blocks.append((b, name, False))
     for z in geo["extra_porous"]:
@@ -4849,18 +4872,53 @@ def launcher_wizard(console, cfg, config_path):
         # (the C4130 is usually ordered that way), and the geometry layer
         # has always supported drive_bay_count = 0 - only this prompt
         # blocked it.
-        dsel = Prompt.ask("  Drive type  [0] No drives  "
-                          "[1] 2.5in NVMe/SAS  [2] 3.5in HDD",
-                          choices=["0", "1", "2"],
-                          default="2" if "3.5" in str(s.get("drive_bay_type")
-                                                      or "") else "1",
-                          console=console)
-        if dsel == "0":
+        # Dynamic drive array: exact quantity, and the 2.5in/3.5in mix.
+        # Unpopulated bays become OPEN AIR in the solved domain (not a
+        # full-width porous slab), which measurably changes the flow - an
+        # empty 8-bay 6029U front passes 96.4 CFM against 79.3 CFM fully
+        # loaded. Answering 0 removes the cage entirely.
+        n_bays = int(s.get("drive_bay_count", 0))
+        bay_cls = str(s.get("drive_bay_size")
+                      or s.get("drive_bay_type") or "2.5")
+        console.print(f"\n  [bold]Drive bays[/] - this chassis has "
+                      f"[cyan]{n_bays}[/] {bay_cls} bays. Empty bays are "
+                      "modelled as open airflow.")
+        n_drv = IntPrompt.ask(f"  How many drives are installed? "
+                              f"[0 to {n_bays}]", default=n_bays,
+                              console=console)
+        n_drv = max(0, min(int(n_drv), n_bays))
+        if n_drv == 0:
             hw["drive_bay_count"] = 0
-            console.print("    [dim]drive cage removed - the front bay "
-                          "becomes open intake air[/]")
+            console.print("    [dim]no drives - the front bay becomes open "
+                          "intake air[/]")
         else:
-            hw["drive_type"] = ("2.5in NVMe/SAS", "3.5in HDD")[int(dsel) - 1]
+            n_35 = IntPrompt.ask(
+                f"    How many of those {n_drv} are 3.5in HDDs? "
+                "(the rest are 2.5in NVMe/SAS)",
+                default=n_drv if "3.5" in bay_cls else 0, console=console)
+            n_35 = max(0, min(int(n_35), n_drv))
+            mix = [e for e in ({"count": n_drv - n_35, "size": "2.5"},
+                               {"count": n_35, "size": "3.5"})
+                   if e["count"] > 0]
+            # A 3.5in drive cannot physically stand in a 1U bay, and a mix
+            # can outgrow the bay grid - build_geometry raises for those.
+            # Try it here so the user is told at the prompt instead of
+            # watching the solver abort minutes later.
+            probe = json.loads(json.dumps(s))
+            probe["drive_array"] = mix
+            try:
+                build_geometry(probe)
+                hw["drive_mix"] = mix
+                console.print(
+                    "    [dim]"
+                    + ", ".join(f"{e['count']}x {e['size']}in" for e in mix)
+                    + f"; {n_bays - n_drv} bay(s) open air[/]")
+            except (ValueError, KeyError) as exc:
+                console.print(f"    [yellow]that mix does not fit this "
+                              f"chassis ({exc}) - falling back to a uniform "
+                              "cage[/]")
+                hw["drive_type"] = ("3.5in HDD" if n_35 > n_drv // 2
+                                    else "2.5in NVMe/SAS")
     hw["heat_load_w"] = FloatPrompt.ask(
         "  Total system wattage [W of heat load]",
         default=float(s["heat_load"]), console=console)
