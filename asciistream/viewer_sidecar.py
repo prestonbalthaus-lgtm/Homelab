@@ -39,14 +39,16 @@ window returns to dormant; [p] re-triggers. SIGTERM/SIGINT (run.sh sends
 SIGTERM on any exit, including Ctrl+C) tears Qt down and exits promptly,
 removing the marker.
 
-An OPTIONAL hardware-boundary overlay is supported: the first *.glb /
-*.gltf found in the watch dir (Draco-compressed primitives included, via
-trimesh + DracoPy) is drawn translucently over the chassis. No such asset
-ships with the repo; when none is present the path is skipped silently.
+The hardware-boundary layer is delegated to hardware_assets.py (one
+entry point shared with visualize.py, so the pop-out and the PNG stay
+identical): a per-profile CAD asset from assets/<profile>.glb|gltf or
+assets/default.glb|gltf (Draco-compressed primitives decoded via
+DracoPy), fitted to the chassis dims, else a procedural chassis built
+from the manifest geometry block. See that module's docstring for the
+search order, unit/placement rule and failure policy.
 """
 
 import argparse
-import glob
 import json
 import logging
 import os
@@ -162,36 +164,6 @@ def velocity_magnitude(mesh, array):
     return mag
 
 
-def load_hardware_overlay(watch_dir):
-    """OPTIONAL Draco/.glb hardware-boundary asset: first readable
-    *.glb/*.gltf in the watch dir, converted to a pyvista surface. The
-    repo ships no such asset - absence is the normal case and is silent.
-    Never raises; a broken asset costs one warning and is skipped."""
-    paths = sorted(glob.glob(os.path.join(watch_dir, "*.glb"))
-                   + glob.glob(os.path.join(watch_dir, "*.gltf")))
-    for path in paths:
-        try:
-            import numpy as np
-            import pyvista as pv
-            import trimesh
-            tm = trimesh.load(path, force="mesh")
-            faces = np.asarray(getattr(tm, "faces", ()), dtype=np.int64)
-            verts = np.asarray(getattr(tm, "vertices", ()), dtype=float)
-            if faces.size == 0 or verts.size == 0:
-                log.warning("hardware asset %s has no triangles - skipped",
-                            path)
-                continue
-            vtk_faces = np.hstack(
-                [np.full((len(faces), 1), 3, dtype=np.int64), faces]).ravel()
-            mesh = pv.PolyData(verts, vtk_faces)
-            log.info("hardware asset overlay: %s (%d triangles)",
-                     path, mesh.n_cells)
-            return mesh
-        except Exception as exc:
-            log.warning("could not load hardware asset %s: %s", path, exc)
-    return None
-
-
 # ------------------------------------------------------------------------------
 #  Interactive scene
 # ------------------------------------------------------------------------------
@@ -268,8 +240,12 @@ class SceneState:
         self.watch = watch_dir
         self.key = None            # (dir, step, done) already rendered
         self.camera_set = False
-        self.overlay = load_hardware_overlay(watch_dir)
-        self.overlay_added = False
+        # hardware-boundary layer (per-profile asset or procedural boxes,
+        # via hardware_assets): resolved lazily on the first manifest -
+        # the lookup needs the manifest's geometry block, and the
+        # geometry is fixed for a run so once is enough
+        self.hw_layers = None
+        self.hw_added = False
         # geometry is fixed for a run, so the spatial labels are placed
         # once and left alone while the field refreshes underneath them
         self.labels_added = False
@@ -356,14 +332,18 @@ class SceneState:
 
         self._add_labels(plotter, man)
 
-        if self.overlay is not None and not self.overlay_added:
+        if self.hw_layers is None:
+            # never raises: a failure inside is one log line and []
+            from hardware_assets import hardware_boundary_layers
+            self.hw_layers = hardware_boundary_layers(self.watch, man)
+        if self.hw_layers and not self.hw_added:
             try:
-                plotter.add_mesh(self.overlay, color="#d0d0d8", opacity=0.5,
-                                 name="hardware_asset")
-                self.overlay_added = True
+                for hw_mesh, hw_kwargs in self.hw_layers:
+                    plotter.add_mesh(hw_mesh, **hw_kwargs)
+                self.hw_added = True
             except Exception as exc:
-                self.overlay = None
-                log.warning("hardware asset overlay failed to render: %s",
+                self.hw_layers = []
+                log.warning("hardware boundary layer failed to render: %s",
                             exc)
 
         done = bool(man.get("done"))

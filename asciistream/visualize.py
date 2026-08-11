@@ -18,12 +18,14 @@ For the interactive, rotatable window press [p] in the live dashboard
 instead (viewer_sidecar.py); this script is the scriptable variant.
 """
 import argparse
+import logging
 import sys
 
 import numpy as np
 import pyvista as pv
 
 from chassis_cfd import VOL_OPEN
+from hardware_assets import hardware_boundary_layers
 from viewer_sidecar import (load_field_mesh, read_manifest, spatial_labels,
                             velocity_magnitude)
 
@@ -47,6 +49,11 @@ def main(argv=None):
     ap.add_argument("--out", default="server_airflow.png",
                     help="output image path (default: server_airflow.png)")
     args = ap.parse_args(argv)
+
+    # surface hardware_assets' asset-choice / scale-fit / failure lines in
+    # this script's console output (the sidecar has its own log config)
+    logging.basicConfig(level=logging.INFO, stream=sys.stdout,
+                        format="%(message)s")
 
     man = read_manifest(args.dir)
     if man is None:
@@ -118,6 +125,17 @@ def main(argv=None):
                     hardware = hardware.translate(   # are coplanar with
                         (0.0, 0.0, 2e-3 * diag))     # the flow surface
                 plotter.add_mesh(hardware, color="#9a9aa4", opacity=0.9)
+
+    # Hardware-boundary layer, through the SAME entry point as the live
+    # pop-out window (hardware_assets): per-profile CAD asset when one is
+    # installed under assets/, else procedural component boxes + chassis
+    # shell from the manifest geometry block. [] for 2d exports.
+    hw_layers = hardware_boundary_layers(args.dir, man)
+    if hw_layers:
+        print(f"hardware boundary layer: {len(hw_layers)} mesh(es) "
+              "(see hardware_assets.py for the asset search order)")
+    for hw_mesh, hw_kwargs in hw_layers:
+        plotter.add_mesh(hw_mesh, **hw_kwargs)
 
     # Same annotations, same source, as the live pop-out window.
     lpts, ltxt = spatial_labels(man.get("geometry"))
