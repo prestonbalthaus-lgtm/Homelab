@@ -18,9 +18,35 @@ Docker.
 
 ## What's new in this update
 
-A large round: three geometry/solver bug fixes plus four new capabilities.
-Everything below is additive — existing runs behave exactly as before
-unless you opt into the new modes.
+Two rounds of work. Everything is additive — existing runs behave exactly
+as before unless you opt into a new mode.
+
+### Latest round
+
+- **Fixed: a noise ceiling that never constrained anything got blamed for
+  an overheat.** The threshold direction was always right
+  (`simulated <= target` passes), but the verdict banner conflated the
+  *noise* question with the *thermal* one — so a 90 dBA ceiling on a 66 dBA
+  fan wall would print "90 dBA noise limit starves the chassis" and advise
+  raising the limit, when the fans were already at full duty and raising it
+  could not possibly help. NOISE and THERMAL are now separate verdicts, and
+  the thermal one is blamed on the ceiling only when the ceiling actually
+  capped the fan duty.
+- **Dynamic mixed drive arrays.** Drive configuration was one monolithic
+  full-width porous slab. Now you give an exact quantity and a 2.5"/3.5"
+  mix, each populated bay becomes its own porous box, and **empty bays are
+  real open airflow** — measured on an 8-bay 6029U: 0 drives passes
+  96.4 CFM, 3 drives 88.8, 6 mixed 85.8, 8 drives 79.3. The wizard probes
+  the geometry before accepting an answer, so a 3.5" drive in a 1U bay is
+  refused at the prompt with the reason rather than aborting the solver.
+- **29 more server profiles** (10 → 39): Dell PowerEdge R610–R940, HPE
+  ProLiant DL360/DL380 across G7–Gen10 Plus, and two Supermicro WIO
+  machines. Sourced dimensions are cited; internal geometry is estimated
+  and declared. See *Profiles* below.
+
+### Previous round
+
+Three geometry/solver bug fixes plus four new capabilities.
 
 **Bug fixes**
 
@@ -349,6 +375,9 @@ Configuration* appends new profiles; the hardware prompts never touch it.
 
 ### Profiles
 
+**39 profiles ship.** The ten below are the original, most-exercised set;
+the further 29 researched enterprise machines follow underneath.
+
 | Key | Model | Form | Fans | Heat load |
 |---|---|---|---|---|
 | `6029U` | Supermicro SuperServer 6029U-E1CR4T *(default)* | 2U | 4 | 350 W |
@@ -363,6 +392,44 @@ Configuration* appends new profiles; the hardware prompts never touch it.
 | `ATX-MID` | Generic ATX Mid-Tower (side view)† | MT | 3 | 450 W |
 
 † modelled side-on: `chassis_width` holds the tower *height* — deliberate.
+
+#### Researched enterprise profiles (29)
+
+| Vendor | Keys |
+|---|---|
+| **Dell PowerEdge** 1U | `R610` `R620` `R630` `R650` `R6515` `R6525` `R240` |
+| **Dell PowerEdge** 2U | `R710` `R720` `R730` `R730xd` `R740` `R750` `R7425` `R7515` `R7625` `R530` |
+| **Dell PowerEdge** 3U/4U | `R940` (3U) · `R930` (4U) |
+| **HPE ProLiant DL360** 1U | `DL360G7` `DL360G8` `DL360G9` `DL360G10P` |
+| **HPE ProLiant DL380** 2U | `DL380G7` `DL380G8` `DL380G9` `DL380G10P` |
+| **Supermicro** | `1029P` (1U) · `6029P` (2U) — WTR SKUs |
+
+The bare `DL360`/`DL380` keys remain the pre-existing Gen10 entries; the
+generation-suffixed keys above are separate profiles, not replacements.
+
+**What is sourced and what is not — read this before trusting a number.**
+Outer chassis dimensions, form factor, fan counts, CPU sockets, DIMM slots,
+drive-bay counts and most PSU wattage classes are **sourced from vendor
+documents and cited per profile** in `staging/SOURCES_dell.md` and
+`staging/SOURCES_hpe_smc.md`. Every **internal coordinate** — `fan_wall_z`,
+all zone z-extents, PSU and riser box coordinates, `pcie_x_band` — plus every
+`zeta`/`permeability` and every `heat_load` is an **engineering estimate**,
+declared per profile in those ledgers. No vendor publishes internal
+coordinate geometry. Named gaps include the R7625 body width, `pcie_max_slots`
+for R630/R6525/R750/R7515/R740, and PSU wattage for R630/R6525/R750. This
+extends the accuracy disclaimer that has always applied to the original ten.
+
+All 29 were verified to mesh and solve, and the dimensions were spot-checked
+against published specs independently of the research — but they carry the
+same "design exploration, not thermal certification" caveat as everything
+else here.
+
+Note that some of these genuinely **share a chassis**: R620/R630,
+R720/R730/R730xd, R740/R7425, R650/R6525 and DL360 Gen8/Gen9 are the same
+physical body, differing in fans, DIMM slots and heat load. That is real, and
+it means the CAD-asset lookup cannot identify those from dimensions alone —
+it uses the solver's published `profile` key instead, and refuses to guess
+when only dimensions are available.
 
 ### Fans
 
