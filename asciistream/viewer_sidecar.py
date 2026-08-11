@@ -46,6 +46,16 @@ assets/default.glb|gltf (Draco-compressed primitives decoded via
 DracoPy), fitted to the chassis dims, else a procedural chassis built
 from the manifest geometry block. See that module's docstring for the
 search order, unit/placement rule and failure policy.
+
+The streamtube layer is delegated the same way to flow_streamtubes.py
+(one entry point, both renderers): velocity streamlines seeded by local
+speed, swept into chassis-scaled tubes, coloured by |u| on the flow
+layer's clim. ON by default for 3-D exports; ASCIISTREAM_STREAMTUBES=0
+turns it off. Tracing can be expensive, so it runs on a daemon worker
+thread: the refresh QTimer only records what the newest export needs and
+later adds the FINISHED tube mesh - the Qt event loop never waits on
+vtkStreamTracer. See that module's docstring for the seeding,
+integration-scale, clipping and failure policy.
 """
 
 import argparse
@@ -54,12 +64,17 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 
 # File-protocol names come from the main module (its top level is
 # stdlib+numpy only, so this import is cheap and container-safe).
 from chassis_cfd import (OUT_VIZ_MANIFEST, VIEWER_READY_FILE,
                          VIEWER_TRIGGER_FILE, VOL_OPEN)
+# stdlib-only at module level (numpy/pyvista stay lazy inside), so the
+# dormant sidecar imports it for free - same rule as hardware_assets
+from flow_streamtubes import (TUBE_ACTOR_NAME, streamtube_layers,
+                              streamtubes_enabled)
 
 POLL_DORMANT_SEC = 0.5     # trigger poll cadence while dormant (one stat)
 REFRESH_MS = 1000          # manifest poll cadence while the window is open
@@ -250,6 +265,17 @@ class SceneState:
         # once and left alone while the field refreshes underneath them
         self.labels_added = False
         self._logged = set()       # one log line per distinct situation
+        # streamtube layer (flow_streamtubes): tracing is too expensive
+        # for the Qt event loop, so the refresh tick only RECORDS what
+        # the newest export needs (_tube_want) and APPLIES finished
+        # meshes (_tube_result); a daemon worker thread does the tracing
+        # in between. Plain attribute hand-off - assignment is atomic -
+        # and only the main thread ever touches the plotter.
+        self.tubes_on = streamtubes_enabled()
+        self._tube_want = None     # (key, man, flow copy, array, clim)
+        self._tube_done = None     # key of the newest finished trace
+        self._tube_result = None   # (key, layers) finished, not applied
+        self._tube_thread = None
 
     def _log_once(self, msg):
         if msg not in self._logged:
@@ -272,6 +298,10 @@ class SceneState:
 
     def _refresh(self, plotter):
         import numpy as np
+        # streamtubes traced since the last tick get added first: this
+        # runs every tick, so a finished trace lands on screen within one
+        # REFRESH_MS even when the export key has not changed
+        self._pump_streamtubes(plotter)
         man = read_manifest(self.watch)
         if man is None:
             self._status(plotter, "waiting for solver data...\n"
@@ -307,6 +337,17 @@ class SceneState:
                     scalar_bar_args={"title": "|u| [m/s]", "color": "white"})
                 plotter.add_mesh(flow.outline(), color="#c8c8d0",
                                  name="outline")
+                if opaque:                       # 2-D slab: no tubes (see
+                    self._log_once("2-D planar export - streamtube "
+                                   "layer not applicable")   # module doc)
+                elif self.tubes_on:
+                    # deep copy: the worker thread must never share a
+                    # dataset with the actor Qt is rendering
+                    self._tube_want = (key, man, flow.copy(deep=True),
+                                       arr, clim)
+                else:
+                    self._log_once("streamtube layer disabled via "
+                                   "ASCIISTREAM_STREAMTUBES")
             else:
                 self._log_once(f"velocity dataset has no '{arr}' array - "
                                "flow layer skipped")
@@ -367,6 +408,58 @@ class SceneState:
             self.key = key
             log.info("rendered %s step %s (done=%s)",
                      man.get("dir"), man.get("step"), done)
+        # hand a just-recorded tube request to the worker on THIS tick -
+        # waiting for the next tick's pump would add a whole REFRESH_MS
+        # before the tracer even starts
+        self._pump_streamtubes(plotter)
+
+    def _pump_streamtubes(self, plotter):
+        """Main-thread half of the streamtube pipeline, called every
+        refresh tick: put a FINISHED trace on screen, then hand the
+        newest wanted export to a fresh worker thread when none is
+        running. The expensive part (vtkStreamTracer + tube sweep) never
+        runs here, so the Qt event loop never stalls on it; the worker
+        never touches the plotter, so rendering state stays single-
+        threaded. Failures degrade to one log line, never a crash."""
+        res = self._tube_result
+        if res is not None:
+            self._tube_result = None
+            _rkey, layers = res
+            try:
+                plotter.remove_actor(TUBE_ACTOR_NAME)
+            except Exception:
+                pass               # nothing on screen yet - fine
+            try:
+                for tube_mesh, tube_kwargs in layers:
+                    plotter.add_mesh(tube_mesh, **tube_kwargs)
+            except Exception as exc:
+                self._log_once(f"streamtube layer failed to render "
+                               f"({exc.__class__.__name__}: {exc})")
+        want = self._tube_want
+        if want is None:
+            return
+        if self._tube_thread is not None and self._tube_thread.is_alive():
+            return                 # busy: the newest want waits its turn
+        self._tube_want = None
+        if want[0] == self._tube_done:
+            return                 # this export is already traced
+
+        def _trace(scene=self, want=want):
+            wkey, man, flow, arr, clim = want
+            # streamtube_layers never raises (its contract) - belt and
+            # braces anyway: a daemon thread must die quietly
+            try:
+                layers = streamtube_layers(man, flow, arr, clim)
+            except Exception:
+                layers = []
+            scene._tube_done = wkey
+            scene._tube_result = (wkey, layers)
+
+        # daemon: SIGTERM must stay prompt - run.sh waits with no SIGKILL
+        # escalation, and a live tracer thread must not hold exit hostage
+        self._tube_thread = threading.Thread(
+            target=_trace, name="streamtubes", daemon=True)
+        self._tube_thread.start()
 
     def _add_labels(self, plotter, man):
         """Spatial annotations inside the 3-D scene: which end is the

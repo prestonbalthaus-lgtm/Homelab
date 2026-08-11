@@ -13,9 +13,20 @@ Run from the repo/work directory with the host viewer venv
 (./setup_host_viewer.sh provisions it):
 
     .venv-viewer/bin/python visualize.py [--dir DIR] [--out PNG]
+                                         [--streamtubes | --no-streamtubes]
 
 For the interactive, rotatable window press [p] in the live dashboard
 instead (viewer_sidecar.py); this script is the scriptable variant.
+
+The streamtube layer (velocity streamlines swept into chassis-scaled
+tubes, coloured by |u| on the flow layer's clim) comes from
+flow_streamtubes.streamtube_layers - the SAME entry point the live
+pop-out uses, so the two renders cannot drift apart. Default ON for 3-D
+exports; --no-streamtubes or ASCIISTREAM_STREAMTUBES=0 turns it off (the
+flag wins over the environment). 2-D planar exports never get tubes -
+the zero-thickness slab keeps its colour map + arrows, behind one log
+line. See flow_streamtubes.py for the seeding, integration-scale,
+clipping and failure policy.
 """
 import argparse
 import logging
@@ -25,6 +36,7 @@ import numpy as np
 import pyvista as pv
 
 from chassis_cfd import VOL_OPEN
+from flow_streamtubes import streamtube_layers, streamtubes_enabled
 from hardware_assets import hardware_boundary_layers
 from viewer_sidecar import (load_field_mesh, read_manifest, spatial_labels,
                             velocity_magnitude)
@@ -48,7 +60,15 @@ def main(argv=None):
                          "(default: current directory)")
     ap.add_argument("--out", default="server_airflow.png",
                     help="output image path (default: server_airflow.png)")
+    ap.add_argument("--streamtubes", action=argparse.BooleanOptionalAction,
+                    default=None,
+                    help="draw the velocity streamtube layer (default: on "
+                         "for 3-D exports; ASCIISTREAM_STREAMTUBES=0 also "
+                         "disables it - this flag wins over the "
+                         "environment)")
     args = ap.parse_args(argv)
+    tubes_on = (args.streamtubes if args.streamtubes is not None
+                else streamtubes_enabled())
 
     # surface hardware_assets' asset-choice / scale-fit / failure lines in
     # this script's console output (the sidecar has its own log config)
@@ -112,6 +132,19 @@ def main(argv=None):
               f"({GLYPH_FRAC:.0%} of the {diag:.2f} m chassis diagonal)")
     except Exception as exc:           # colour-only render still stands
         print(f"direction arrows skipped ({exc})", file=sys.stderr)
+
+    # Streamtube layer through the SAME entry point as the live pop-out
+    # (flow_streamtubes): |u|-seeded streamlines swept into chassis-
+    # scaled tubes, clipped to the fluid domain, coloured on this
+    # render's clim. Returns [] behind one log line for 2-D slabs and
+    # every failure mode - the colour+arrow render above still stands.
+    if tubes_on:
+        for tube_mesh, tube_kwargs in streamtube_layers(man, flow, vec,
+                                                        clim):
+            plotter.add_mesh(tube_mesh, **tube_kwargs)
+    else:
+        print("streamtube layer disabled (--no-streamtubes / "
+              "ASCIISTREAM_STREAMTUBES)")
 
     zones = load_field_mesh(args.dir, fields, "zones")
     if zones is not None:
