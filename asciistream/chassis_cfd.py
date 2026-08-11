@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ================================================================================
- ASCIISTREAM v0.9.1 - terminal CFD for server chassis (launcher/worker + TUI)
+ ASCIISTREAM v0.9.2 - terminal CFD for server chassis (launcher/worker + TUI)
  parametric gmsh meshing from server_configs.json + FEniCSx/dolfinx transient
  incremental pressure-correction (Chorin/IPCS family) + MPI worker pool +
  socket-streamed live ASCII particle dashboard and a CAD-style isometric
@@ -259,6 +259,7 @@
 ================================================================================
 """
 
+import glob
 import io
 import json
 import os
@@ -393,6 +394,34 @@ VIZ_KEEP_DIRS    = 2     # current + previous (a slow reader may still hold
 # stays byte-identical to the pre-dual-engine behaviour.
 VIEWER_READY_FILE = ".asciistream_viewer_ready"
 VIZ_EVERY_DEFAULT = 5    # steps between exports when a viewer IS attached
+
+# --- JIT form cache + compile flags -------------------------------------------
+# dolfinx reads these from `Path.cwd()/dolfinx_jit_options.json` (see
+# dolfinx.jit._load_options), and cwd is the bind-mounted /work, so writing
+# that file is the documented way to set them without touching all 14
+# fem.form() call sites.
+#
+# THE POINT: cache_dir defaults to ~/.cache/fenics INSIDE the container, and
+# run.sh starts the container with --rm. The compiled forms were therefore
+# thrown away on every exit and recompiled from scratch on every run. Moving
+# the cache onto the mount makes it survive, which is the whole of the
+# "startup is slow" complaint - the compile itself was already -O2.
+JIT_OPTIONS_FILE = "dolfinx_jit_options.json"
+JIT_CACHE_DIRNAME = ".jit-cache"     # under the work dir => on the host
+# Overridable so the flag set can be A/B benchmarked without editing code
+# (ASCIISTREAM_JIT_ARGS="-O3 -march=native"). Defaults to -O3 -g0: one step
+# up from dolfinx's own -O2 -g0, with no numerics or portability risk.
+# -ffast-math and -march=native are deliberately NOT default: the first
+# permits reassociation and assumes no NaN/Inf in a solver that divides by
+# flow quantities, the second bakes host CPU features into a cache that is
+# now shared across runs.
+JIT_ARGS_DEFAULT = ["-O3", "-g0"]
+
+# Regenerated solver output. Wiped at worker startup so a short run cannot
+# sit in a directory still holding a previous longer run's pieces.
+STALE_OUTPUT_GLOBS = ("*.vtu", "*.pvtu", "*.h5", "*.xdmf",
+                      OUT_VIZ_MANIFEST, OUT_VIZ_MANIFEST + ".tmp",
+                      VIZ_DIR_PREFIX + "*")
 
 # --- Fan affinity laws (worker args key "fan_duty" = N/N_rated) ---------------
 # Q ~ N, dP ~ N^2, shaft power ~ N^3, dBA ~ dBA_rated + 50*log10(N/N_rated).
@@ -1076,15 +1105,121 @@ def ensure_custom_server(cfg, name, config_path):
 # leave more open backplane area than a dense 3.5" HDD wall.
 DRIVE_TYPE_ZETA = {"2.5in NVMe/SAS": 0.75, "3.5in HDD": 1.15}
 
+# --- Dynamic drive arrays (profile key "drive_array" / wizard hw key
+# --- "drive_mix"; full schema: the build_geometry docstring) ------------------
+# Bare-drive envelope per size class: (width, length, thickness) in METRES
+# of the industry form factors (SFF-8201 / SFF-8301, rounded to the mm).
+# LENGTH runs into the chassis (insertion direction z); the bay grid stands
+# a drive ON EDGE (thickness across the width) when the chassis is tall
+# enough - the dense server layout - else lays it FLAT (width across).
+DRIVE_CLASS_DIMS = {"2.5in NVMe/SAS": (0.070, 0.100, 0.015),
+                    "3.5in HDD": (0.102, 0.147, 0.026)}
+DRIVE_CLASS_LABEL = {"2.5in NVMe/SAS": "SSD", "3.5in HDD": "HDD"}
+# accepted spellings of a drive "size" -> canonical DRIVE_TYPE_ZETA key
+DRIVE_SIZE_ALIASES = {"2.5": "2.5in NVMe/SAS", "2.5in": "2.5in NVMe/SAS",
+                      "2.5in nvme/sas": "2.5in NVMe/SAS",
+                      "3.5": "3.5in HDD", "3.5in": "3.5in HDD",
+                      "3.5in hdd": "3.5in HDD"}
+DRIVE_BAY_GAP = 0.003        # air gap between adjacent bays [m]
+DRIVE_BAY_MARGIN_X = 0.002   # side clearance of the bay grid [m]
+DRIVE_BAY_Y0_FRAC = 0.04     # bay floor, as a fraction of chassis height
+DRIVE_BAY_Y1_FRAC = 0.96     # bay ceiling, as a fraction of chassis height
+
+
+def normalize_drive_size(size):
+    """Canonical drive size class ('2.5in NVMe/SAS' | '3.5in HDD') from any
+    accepted spelling (2.5 / "2.5" / "2.5in" / the full class name, case-
+    insensitive). ValueError on anything else - a typo'd size must die at
+    config time, never mesh a wrong footprint."""
+    key = str(size).strip().lower().rstrip('"')
+    if key in DRIVE_SIZE_ALIASES:
+        return DRIVE_SIZE_ALIASES[key]
+    raise ValueError(
+        f"unknown drive size {size!r}: accepted spellings are "
+        + ", ".join(sorted(set(DRIVE_SIZE_ALIASES))))
+
+
+def parse_drive_mix(spec):
+    """Normalise a drive-mix specification into the canonical
+    "drive_array" list [{"count": int, "size": <class>}, ...].
+
+    ONE parser for every entry point (wizard prompt, hw override,
+    profile JSON, scripted callers). Accepts:
+      - a list/tuple of {"count", "size"[, "label"]} dicts (the schema
+        form documented in the build_geometry docstring),
+      - a JSON string of that list,
+      - a compact string like "2x2.5 + 4x3.5" (also comma-separated):
+        <count>x<size> terms joined by '+' or ','; "" means empty.
+    Returns a NEW list of plain dicts with validated integer counts >= 0
+    and canonical size classes. ValueError/TypeError on malformed input.
+    Pure stdlib - host-testable."""
+    if isinstance(spec, str):
+        txt = spec.strip()
+        if not txt:
+            return []
+        if txt.startswith("["):
+            spec = json.loads(txt)
+        else:
+            groups = []
+            for term in txt.replace(",", "+").split("+"):
+                term = term.strip()
+                if not term:
+                    continue
+                cnt, sep, size = term.partition("x")
+                if not sep:
+                    cnt, sep, size = term.partition("X")
+                if not sep or not cnt.strip() or not size.strip():
+                    raise ValueError(
+                        f"drive mix term {term!r}: expected <count>x<size>"
+                        ' (e.g. "2x2.5 + 4x3.5")')
+                groups.append({"count": cnt.strip(), "size": size.strip()})
+            spec = groups
+    if not isinstance(spec, (list, tuple)):
+        raise TypeError('drive mix must be a list of {"count", "size"} '
+                        'entries or a string like "2x2.5+4x3.5"')
+    out = []
+    for k, g in enumerate(spec):
+        if not isinstance(g, dict):
+            raise ValueError(f"drive mix entry {k}: expected a dict with "
+                             '"count" and "size"')
+        if "size" not in g:
+            raise ValueError(f'drive mix entry {k}: needs a "size"')
+        try:
+            count = int(str(g.get("count")).strip())
+        except (TypeError, ValueError):
+            raise ValueError(f"drive mix entry {k}: needs an integer "
+                             '"count"')
+        if count < 0:
+            raise ValueError(f"drive mix entry {k}: count must be >= 0")
+        entry = {"count": count, "size": normalize_drive_size(g["size"])}
+        if g.get("label") is not None:
+            entry["label"] = str(g["label"])
+        out.append(entry)
+    return out
+
 
 def apply_hw_overrides(s, hw):
     """Fold the wizard's hardware prompts into a RUNTIME copy of the profile
     (never persisted - the temp overlay config carries it to the workers).
 
     hw keys (all optional): drive_type ('2.5in NVMe/SAS' | '3.5in HDD'),
-    heat_load_w, inlet_temp_c, exhaust_temp_c, gpu_count + gpu_watts,
-    nic (bool), pcie_card_count (int >= 0). GPU/NIC/card-count need the
-    profile's pcie_zone_z to mesh cards.
+    drive_bay_count (int >= 0: TOTAL bay capacity; 0 removes the cage),
+    drive_mix (dynamic drive array - see below), heat_load_w,
+    inlet_temp_c, exhaust_temp_c, gpu_count + gpu_watts, nic (bool),
+    pcie_card_count (int >= 0). GPU/NIC/card-count need the profile's
+    pcie_zone_z to mesh cards.
+
+    drive_mix is the wizard's PER-CLASS drive population answer: anything
+    parse_drive_mix accepts - a list of {"count", "size"} dicts or a
+    compact string like "2x2.5+4x3.5". When present it OWNS the front
+    bay: it becomes the profile's "drive_array" key (discrete per-drive
+    porous boxes, unpopulated bays open air - schema and layout rules in
+    the build_geometry docstring), superseding the monolithic slab. The
+    legacy drive_type zeta scaling is then SKIPPED - each class already
+    carries its own DRIVE_TYPE_ZETA multiplier, so applying drive_type on
+    top would double-scale the impedance. drive_bay_count keeps its
+    meaning as the BAY CAPACITY the mix must fit into. Send [] (or "")
+    to model every bay empty (fully open front bay).
 
     pcie_card_count is the wizard's EXPLICIT population answer: when
     present it OWNS populated_pcie_slots (clamped to the profile's
@@ -1097,8 +1232,16 @@ def apply_hw_overrides(s, hw):
     # open air). Clamped at 0 - a negative count is meaningless.
     if hw.get("drive_bay_count") is not None:
         s["drive_bay_count"] = max(0, int(hw["drive_bay_count"]))
+    if hw.get("drive_mix") is not None:
+        # dynamic drive array: normalised through the single parser so a
+        # malformed wizard answer dies HERE, at prompt time, not in the
+        # worker's build_geometry
+        s["drive_array"] = parse_drive_mix(hw["drive_mix"])
     dt = hw.get("drive_type")
-    if dt and s.get("drive_zone_z") and int(s.get("drive_bay_count", 0)) > 0:
+    if (dt and s.get("drive_zone_z") and int(s.get("drive_bay_count", 0)) > 0
+            and s.get("drive_array") is None):
+        # legacy monolithic-slab path only: a discrete drive_array carries
+        # per-class DRIVE_TYPE_ZETA multipliers itself (see docstring)
         s["drive_zeta"] = float(s["drive_zeta"]) * DRIVE_TYPE_ZETA[dt]
         s["drive_bay_type"] = dt
     if hw.get("heat_load_w") is not None:
@@ -1172,6 +1315,9 @@ def enforce_ultra_ram(mesh_level):
 # Physical group tags
 VOL_OPEN, VOL_DRIVES, VOL_CPUS = 1, 2, 3
 VOL_EXTRA0 = 20             # custom porous zones tag upward from here
+VOL_DRIVE0 = 200            # discrete drive-array boxes tag upward from
+                            # here (clear of VOL_EXTRA0 + any sane count
+                            # of custom zones)
 SURF_FRONT, SURF_FAN, SURF_OUTLET, SURF_WALLS = 11, 12, 13, 14
 GEOM_TOL = 1e-7
 
@@ -1187,17 +1333,193 @@ def psu_fan_dp(rpm, size_mm):
     return PSU_FAN_PRESSURE_COEFF * RHO_AIR * tip ** 2
 
 
+def _drive_footprint(cls, usable_h, what):
+    """Cross-section (w, h) [m] a bay/drive of size class `cls` presents
+    across the chassis: ON EDGE (thickness wide, width tall) when the
+    chassis is tall enough - the dense server layout - else FLAT (width
+    wide, thickness tall). A 1U (~43 mm internal) can NOT stand a drive
+    on edge; a chassis too low even for a flat drive raises a clear
+    ValueError. `what` ("bay" | "drive") only shapes the message."""
+    w_d, _l, t_d = DRIVE_CLASS_DIMS[cls]
+    if w_d <= usable_h:
+        return t_d, w_d                    # on edge
+    if t_d <= usable_h:
+        return w_d, t_d                    # flat
+    raise ValueError(
+        f"a {cls} {what} is {t_d * 1000:.0f} mm even lying flat and "
+        f"cannot fit the {usable_h * 1000:.0f} mm of usable chassis "
+        "height - use smaller drives or a taller chassis")
+
+
+def _drive_bay_class(server_cfg, groups):
+    """Size class of the PHYSICAL bays the drives slot into: the optional
+    explicit "drive_bay_size" key wins, else the leading 2.5/3.5 of the
+    free-text drive_bay_type ("3.5in SAS", "2.5in SFF", ...), else the
+    largest requested class (everything then fits by construction)."""
+    explicit = server_cfg.get("drive_bay_size")
+    if explicit is not None:
+        return normalize_drive_size(explicit)
+    bay_type = str(server_cfg.get("drive_bay_type") or "").strip()
+    for prefix, cls in (("3.5", "3.5in HDD"), ("2.5", "2.5in NVMe/SAS")):
+        if bay_type.startswith(prefix):
+            return cls
+    if any(g["size"] == "3.5in HDD" for g in groups):
+        return "3.5in HDD"
+    return "2.5in NVMe/SAS" if groups else "3.5in HDD"
+
+
+def _build_drive_array_boxes(server_cfg, W, H):
+    """Lay the "drive_array" population out as DISCRETE porous boxes in a
+    front bay grid (schema + rules: the build_geometry docstring). Returns
+    the geo["drive_boxes"] list - dicts carrying name/box/size/zeta/C2/K/
+    tag/label/bay. Every misfit dies here with a clear ValueError; the
+    function never emits overlapping or out-of-envelope boxes. Pure
+    numpy/python - host-testable."""
+    groups = parse_drive_mix(server_cfg.get("drive_array") or [])
+    n_drives = sum(g["count"] for g in groups)
+    if n_drives == 0:
+        return []                     # every bay empty: open front bay
+    n_bays = int(server_cfg.get("drive_bay_count", 0))
+    if n_drives > n_bays:
+        raise ValueError(
+            f"drive_array populates {n_drives} drives but the chassis "
+            f"has only {n_bays} bays (drive_bay_count) - reduce the mix "
+            "or raise drive_bay_count")
+    if not server_cfg.get("drive_zone_z"):
+        raise ValueError('"drive_array" requires "drive_zone_z" - the '
+                         "front cage z-range the bays live in")
+    dz0, dz1 = (float(v) for v in server_cfg["drive_zone_z"])
+    zone_depth = dz1 - dz0
+    if zone_depth <= 0.0:
+        raise ValueError(f"drive_zone_z [{dz0:g}, {dz1:g}] has no depth")
+    base_zeta = float(server_cfg["drive_zeta"])
+    perm = float(server_cfg["drive_permeability"])
+
+    # --- the bay grid: bays of the CHASSIS bay class, columns across the
+    # width, rows stacked bottom-up from the bay floor (left-to-right,
+    # then up - hot-swap wall order), centred across the width
+    y0 = DRIVE_BAY_Y0_FRAC * H
+    usable_h = (DRIVE_BAY_Y1_FRAC - DRIVE_BAY_Y0_FRAC) * H
+    usable_w = W - 2.0 * DRIVE_BAY_MARGIN_X
+    bay_cls = _drive_bay_class(server_cfg, groups)
+    bay_w, bay_h = _drive_footprint(bay_cls, usable_h, "bay")
+    on_edge = bay_h == DRIVE_CLASS_DIMS[bay_cls][0]
+    cols = int((usable_w + DRIVE_BAY_GAP) // (bay_w + DRIVE_BAY_GAP))
+    rows = int((usable_h + DRIVE_BAY_GAP) // (bay_h + DRIVE_BAY_GAP))
+    if cols < 1 or cols * rows < n_drives:
+        raise ValueError(
+            f"{n_drives} drives do not fit the front bay grid: {bay_cls} "
+            f"bays lay out {cols} per row x {rows} row(s) = "
+            f"{cols * rows} bays in this {W * 1000:.0f} x "
+            f"{H * 1000:.0f} mm chassis - reduce the mix or use smaller "
+            "drives")
+    x_start = DRIVE_BAY_MARGIN_X + 0.5 * (
+        usable_w - cols * bay_w - (cols - 1) * DRIVE_BAY_GAP)
+
+    boxes = []
+    class_idx = {}
+    i = 0
+    for g in groups:
+        cls = g["size"]
+        w_d, l_d, t_d = DRIVE_CLASS_DIMS[cls]
+        d_w, d_h = (t_d, w_d) if on_edge else (w_d, t_d)  # bay orientation
+        if d_w > bay_w + 1e-9 or d_h > bay_h + 1e-9:
+            raise ValueError(
+                f"a {cls} drive does not fit this chassis's {bay_cls} "
+                f"bays ({bay_w * 1000:.0f} x {bay_h * 1000:.0f} mm) - "
+                "3.5in drives need 3.5in bays (2.5in drives fit either "
+                "via adapter trays)")
+        depth = min(l_d, zone_depth)
+        zeta = base_zeta * DRIVE_TYPE_ZETA[cls]
+        prefix = g.get("label") or DRIVE_CLASS_LABEL[cls]
+        for _ in range(g["count"]):
+            col, row = i % cols, i // cols
+            bx0 = x_start + col * (bay_w + DRIVE_BAY_GAP)
+            by0 = y0 + row * (bay_h + DRIVE_BAY_GAP)
+            x0 = bx0 + 0.5 * (bay_w - d_w)   # centred across its bay
+            box = (x0, by0, dz0,             # sitting on the bay floor
+                   x0 + d_w, by0 + d_h, dz0 + depth)
+            j = class_idx.get(prefix, 0) + 1
+            class_idx[prefix] = j
+            boxes.append({"name": f"drive_{i + 1}", "box": box,
+                          "size": cls, "zeta": zeta, "C2": zeta / depth,
+                          "K": perm, "tag": VOL_DRIVE0 + i,
+                          "label": f"{prefix} {j}", "bay": i + 1})
+            i += 1
+    return boxes
+
+
+def drive_mix_summary(geo):
+    """[(size class, count), ...] of the meshed discrete drive population,
+    in layout order. Pure python - shared by the worker banner and the
+    ADDED summary keys; empty for legacy slab/none geometries."""
+    mix = {}
+    for d in geo.get("drive_boxes") or []:
+        mix[d["size"]] = mix.get(d["size"], 0) + 1
+    return list(mix.items())
+
+
 def build_geometry(server_cfg):
     """Turn the config numbers into concrete boxes.
 
     Returns a dict:
       dims (W,H,L), fan_z, drives (name,box,K,C2) or None, cpus
       [(name,box,K,C2)], solids [(name,box)], extra_porous [zone dicts],
-      labels {name: canvas/telemetry label}, solid_telem {name: kind},
-      optics_box (+ optics_custom), n_bays.
+      drive_boxes [drive dicts - see drive_array below; [] outside
+      discrete mode], drive_mode ("slab" | "discrete" | "none"),
+      n_drives (populated drive count), labels {name: canvas/telemetry
+      label}, solid_telem {name: kind}, optics_box (+ optics_custom),
+      n_bays (TOTAL bay capacity - populated or not).
     Rules (documented engineering assumptions):
-      - drive cage: porous slab over drive_zone_z; SKIPPED when
+      - drive cage (LEGACY, no "drive_array" key): ONE porous slab over
+        drive_zone_z spanning the full chassis cross-section; SKIPPED when
         drive_bay_count is 0 or drive_zone_z is absent (switches, routers).
+        Kept verbatim - impedance and mesh BIT-identical to the historical
+        behaviour (the pinned 6029U regression gates depend on it).
+      - drive_array (DYNAMIC, optional per-profile / per-run key): a
+        MIXED drive population meshed as DISCRETE per-drive porous boxes;
+        unpopulated bays are OPEN FLUID DOMAIN - no box at all, air flows
+        through. Presence of the key (even []) replaces the slab:
+        geo["drives"] is None and geo["drive_boxes"] carries the drives.
+        SCHEMA:
+            "drive_array": [{"count": N, "size": S[, "label": TXT]}, ...]
+          count  int >= 0 - drives of this class (0 entries are skipped).
+          size   "2.5" | "2.5in" | "2.5in NVMe/SAS" (70x100x15 mm) or
+                 "3.5" | "3.5in" | "3.5in HDD" (102x147x26 mm), case-
+                 insensitive (normalize_drive_size). The wizard hw key
+                 "drive_mix" and the compact string form "2x2.5+4x3.5"
+                 (parse_drive_mix) normalise to this list.
+          label  optional canvas label prefix (default "SSD" / "HDD";
+                 drives are labelled "<prefix> 1", "<prefix> 2", ... per
+                 class). Names are always drive_1..drive_N in layout
+                 order - stable handles for the canvas/viewer/telemetry.
+        RELATED KEYS: drive_bay_count is the TOTAL bay capacity the mix
+        must fit (sum of counts <= it, else ValueError; the wizard hw key
+        drive_bay_count overrides it). drive_zone_z is the front cage
+        z-range the bays live in (required). drive_zeta is the per-drive
+        impedance BASIS: each drive carries zeta = drive_zeta x
+        DRIVE_TYPE_ZETA[size] over its own box length (C2 = zeta/L_box,
+        so a streamline through a drive picks up the full class zeta -
+        the same accounting as the legacy slab), with the profile's
+        drive_permeability as K. Optional "drive_bay_size" ("2.5"/"3.5")
+        pins the PHYSICAL bay class; default is parsed from the leading
+        2.5/3.5 of drive_bay_type, else the largest requested class.
+        LAYOUT: bays form a grid derived from the chassis - bay
+        cross-section from the bay class, ON EDGE (thickness across the
+        width) when the drive width fits the usable height (2U and up),
+        else FLAT (1U; a chassis too low even for a flat drive is a
+        ValueError). Columns span the width, rows stack bottom-up from
+        the bay floor (4 % of H); drives fill bays left-to-right then
+        upward, each centred in its bay, z from drive_zone_z[0] over
+        min(drive length, zone depth). A 2.5in drive in a 3.5in bay sits
+        centred with open air around it (adapter-tray reality); a 3.5in
+        drive in 2.5in bays is a ValueError, as is a mix exceeding the
+        grid (e.g. eight 3.5in drives in a 1U). Nothing is ever silently
+        clipped, overlapped or dropped. NOTE (engine "2d"): like every
+        box, a drive row that does not straddle the mid-height plane is
+        absent from the planar slice - partial single-row populations low
+        in a 2U can therefore vanish from the 2-D engine (documented
+        projection semantics, see _midplane_hit).
       - CPU sinks: cpu_sockets blocks (0 allowed), width 19 % of W, centred
         at W*(i+1)/(sockets+1), y from 6 % to 70 % of H, z = cpu_zone_z;
         optional cpu_label renames them (e.g. "ASIC" on switches).
@@ -1273,13 +1595,26 @@ def build_geometry(server_cfg):
     labels = {}
 
     drives = None
-    if (int(server_cfg.get("drive_bay_count", 0)) > 0
+    drive_boxes = []
+    if server_cfg.get("drive_array") is not None:
+        # DYNAMIC drive array: discrete per-drive porous boxes in the
+        # front bay grid; unpopulated bays are open fluid domain (no box)
+        drive_mode = "discrete"
+        drive_boxes = _build_drive_array_boxes(server_cfg, W, H)
+        for d in drive_boxes:
+            labels[d["name"]] = d["label"]
+    elif (int(server_cfg.get("drive_bay_count", 0)) > 0
             and server_cfg.get("drive_zone_z")):
+        # LEGACY monolithic slab - verbatim (bit-identical mesh/impedance:
+        # the pinned 6029U regression gates depend on it)
+        drive_mode = "slab"
         dz0, dz1 = server_cfg["drive_zone_z"]
         drives = ("drive_array",
                   (0.0, 0.0, float(dz0), W, H, float(dz1)),
                   float(server_cfg["drive_permeability"]),
                   float(server_cfg["drive_zeta"]) / (dz1 - dz0))
+    else:
+        drive_mode = "none"
 
     n_cpu = int(server_cfg.get("cpu_sockets", 0))
     cpu_label = server_cfg.get("cpu_label", "CPU")
@@ -1473,13 +1808,21 @@ def build_geometry(server_cfg):
                   else (0.05 * W, 0.10 * H, L - 0.03,
                         0.95 * W, 0.90 * H, L - 0.005))
 
+    n_bays = int(server_cfg.get("drive_bay_count", 0))
     geo = {
         "dims": (W, H, L), "fan_z": fz,
         "drives": drives, "cpus": cpus, "solids": solids,
         "extra_porous": extra_porous, "labels": labels,
         "solid_telem": solid_telem, "fan_marks": fan_marks,
         "optics_box": optics_box, "optics_custom": bool(oz),
-        "n_bays": int(server_cfg.get("drive_bay_count", 0)),
+        "n_bays": n_bays,
+        # dynamic drive arrays: "slab" = legacy monolith in geo["drives"],
+        # "discrete" = per-drive boxes in geo["drive_boxes"] (n_drives of
+        # n_bays populated; the rest are open air), "none" = no drives
+        "drive_mode": drive_mode,
+        "drive_boxes": drive_boxes,
+        "n_drives": (len(drive_boxes) if drive_mode == "discrete"
+                     else n_bays if drive_mode == "slab" else 0),
     }
     _validate_geometry(geo)
     return geo
@@ -1557,7 +1900,12 @@ def fan_operating_point(server_cfg, fan_cfg, geo, duty=1.0):
     parallel, is intersected with the impedance estimate K = rho*zeta_est/
     (2A^2) (custom porous zones contribute zeta x their covered cross-
     section fraction). The meshed CFD impedance is the truth; this
-    estimate only chooses the fan-plane velocity.
+    estimate only chooses the fan-plane velocity. DYNAMIC drive arrays
+    (geo["drive_mode"] == "discrete"): the config drive_zeta - which
+    models the legacy full-width slab - is replaced by the per-drive
+    contributions of the POPULATED bays, each like a custom porous zone
+    (class zeta x covered cross-section fraction; empty bays contribute
+    nothing). Legacy geometries keep the historical expression verbatim.
 
     duty = N/N_rated (1.0 = rated RPM = legacy behaviour, bit-identical).
     Fan Affinity Laws applied BEFORE the intersection: Q ~ N (qmax*duty),
@@ -1575,6 +1923,18 @@ def fan_operating_point(server_cfg, fan_cfg, geo, duty=1.0):
     zeta_est = (float(server_cfg.get("drive_zeta", 0.0))
                 + 0.5 * float(server_cfg.get("cpu_zeta", 0.0))
                 + float(server_cfg.get("baseline_zeta", 25.0)))
+    if geo.get("drive_mode") == "discrete":
+        # dynamic drive array: the config drive_zeta models the LEGACY
+        # full-width slab, so it is removed and each POPULATED bay
+        # contributes like a custom porous zone instead - its class zeta
+        # x its covered cross-section fraction (empty bays are open air
+        # and contribute nothing). Legacy geometries never enter this
+        # branch: their estimate stays bit-identical.
+        zeta_est -= float(server_cfg.get("drive_zeta", 0.0))
+        for d in geo["drive_boxes"]:
+            b = d["box"]
+            afrac = (b[3] - b[0]) * (b[4] - b[1]) / area
+            zeta_est += d["zeta"] * min(afrac, 1.0)
     for z in geo["extra_porous"]:
         b = z["box"]
         afrac = (b[3] - b[0]) * (b[4] - b[1]) / area
@@ -1774,6 +2134,7 @@ def _validate_geometry(geo):
                 and -1e-9 <= b[2] < b[5] <= L + 1e-9)
 
     porous = ([(geo["drives"][0], geo["drives"][1])] if geo["drives"] else [])
+    porous += [(d["name"], d["box"]) for d in geo.get("drive_boxes") or []]
     porous += [(n, b) for n, b, _k, _c in geo["cpus"]]
     porous += [(z["name"], z["box"]) for z in geo["extra_porous"]]
     # the optics telemetry slab joins the envelope/straddle checks (a
@@ -1839,6 +2200,8 @@ def _gmsh_build_model(geo, lc):
     porous = []
     if geo["drives"]:
         porous.append(("drives", geo["drives"][1]))
+    for d in geo.get("drive_boxes") or []:
+        porous.append((d["tag"], d["box"]))   # discrete drive array
     for _n, b, _k, _c in geo["cpus"]:
         porous.append(("cpus", b))
     for z in geo["extra_porous"]:
@@ -1886,6 +2249,10 @@ def _gmsh_build_model(geo, lc):
     if zone_vols.get("drives"):
         gmsh.model.addPhysicalGroup(3, zone_vols["drives"], VOL_DRIVES,
                                     name="drives")
+    for d in geo.get("drive_boxes") or []:
+        if zone_vols.get(d["tag"]):
+            gmsh.model.addPhysicalGroup(3, zone_vols[d["tag"]], d["tag"],
+                                        name=d["name"])
     if zone_vols.get("cpus"):
         gmsh.model.addPhysicalGroup(3, zone_vols["cpus"], VOL_CPUS,
                                     name="cpus")
@@ -1918,7 +2285,12 @@ def _gmsh_build_model(geo, lc):
               + [b[2] for _n, b, _k, _c in geo["cpus"]]
               + [z["box"][2] for z in geo["extra_porous"]])
     comp_z0 = min(comp_z) if comp_z else fz
-    front_z0 = geo["drives"][1][2] if geo["drives"] else 0.0
+    if geo["drives"]:
+        front_z0 = geo["drives"][1][2]
+    elif geo.get("drive_boxes"):        # discrete array: same medium band
+        front_z0 = min(d["box"][2] for d in geo["drive_boxes"])
+    else:
+        front_z0 = 0.0
     f_fine = gmsh.model.mesh.field.add("Box")
     for k, v in (("VIn", lc), ("VOut", lc_bulk),
                  ("XMin", -0.01), ("XMax", W + 0.01), ("YMin", -0.01),
@@ -1976,9 +2348,13 @@ def _gmsh_build_model_2d(geo, lc):
         return occ.addRectangle(b[0], b[2], 0.0, b[3] - b[0], b[5] - b[2])
 
     solids = [(n, b) for n, b in geo["solids"] if _midplane_hit(b, H)]
+    drive_tags = {d["tag"] for d in geo.get("drive_boxes") or []}
     porous = []
     if geo["drives"] and _midplane_hit(geo["drives"][1], H):
         porous.append(("drives", geo["drives"][1]))
+    for d in geo.get("drive_boxes") or []:
+        if _midplane_hit(d["box"], H):      # drive rows below/above the
+            porous.append((d["tag"], d["box"]))   # plane are absent
     for _n, b, _k, _c in geo["cpus"]:
         if _midplane_hit(b, H):
             porous.append(("cpus", b))
@@ -2022,6 +2398,10 @@ def _gmsh_build_model_2d(geo, lc):
     if zone_vols.get("drives"):
         gmsh.model.addPhysicalGroup(2, zone_vols["drives"], VOL_DRIVES,
                                     name="drives")
+    for d in geo.get("drive_boxes") or []:
+        if zone_vols.get(d["tag"]):
+            gmsh.model.addPhysicalGroup(2, zone_vols[d["tag"]], d["tag"],
+                                        name=d["name"])
     if zone_vols.get("cpus"):
         gmsh.model.addPhysicalGroup(2, zone_vols["cpus"], VOL_CPUS,
                                     name="cpus")
@@ -2050,10 +2430,18 @@ def _gmsh_build_model_2d(geo, lc):
     gmsh.model.addPhysicalGroup(1, wall_s, SURF_WALLS, name="walls")
 
     # same graded size bands as the 3-D builder; gmsh Y is chassis z here
+    # (drive boxes stay OUT of comp_z like the legacy slab: they are the
+    # front band the medium field covers, not a rear fine-band component)
     comp_z = ([b[2] for _n, b in solids]
-              + [b[2] for key, b in porous if key != "drives"])
+              + [b[2] for key, b in porous
+                 if key != "drives" and key not in drive_tags])
     comp_z0 = min(comp_z) if comp_z else fz
-    front_z0 = geo["drives"][1][2] if geo["drives"] else 0.0
+    if geo["drives"]:
+        front_z0 = geo["drives"][1][2]
+    elif geo.get("drive_boxes"):
+        front_z0 = min(d["box"][2] for d in geo["drive_boxes"])
+    else:
+        front_z0 = 0.0
     f_fine = gmsh.model.mesh.field.add("Box")
     for k, v in (("VIn", lc), ("VOut", lc_bulk),
                  ("XMin", -0.01), ("XMax", W + 0.01),
@@ -2177,6 +2565,10 @@ def _viz_geometry(geo):
         d = entry(dname, dbox, "porous")
         d["label"] = "DRIVES"      # matches the ASCII canvas, which
         comps.append(d)            # hardcodes "[ DRIVES ]" for the cage
+    for dz in geo.get("drive_boxes") or []:
+        # discrete drive array: one labelled porous box per populated bay
+        # (drive_1..drive_N; empty bays are open air and ship nothing)
+        comps.append(entry(dz["name"], dz["box"], "porous"))
     for cname, cbox, _K, _C2 in geo.get("cpus", []):
         comps.append(entry(cname, cbox, "porous"))
     for sname, sbox in geo.get("solids", []):
@@ -2194,6 +2586,71 @@ def _viz_geometry(geo):
     }
 
 
+def jit_compile_args():
+    """Extra C compiler args for the form compiler.
+
+    ASCIISTREAM_JIT_ARGS overrides (space separated) so a flag set can be
+    benchmarked without a code change. Empty string = dolfinx's own
+    default, i.e. opt out entirely."""
+    env = os.environ.get("ASCIISTREAM_JIT_ARGS")
+    if env is None:
+        return list(JIT_ARGS_DEFAULT)
+    return [a for a in env.split() if a]
+
+
+def write_jit_options(workdir="."):
+    """Point dolfinx's form cache at a PERSISTENT directory and set the
+    compile flags, by writing `dolfinx_jit_options.json` into the work dir.
+
+    Must run before the first fem.form() in the process: dolfinx caches the
+    loaded options with functools.cache, so a file written later is ignored.
+
+    Returns the cache directory, or None if the options file could not be
+    written (the solve then just runs on dolfinx defaults - a slower start
+    is not worth aborting a run over)."""
+    cache = os.path.abspath(os.path.join(workdir, JIT_CACHE_DIRNAME))
+    opts = {"cache_dir": cache, "cffi_extra_compile_args": jit_compile_args()}
+    path = os.path.join(workdir, JIT_OPTIONS_FILE)
+    try:
+        os.makedirs(cache, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(opts, f, indent=1)
+        os.replace(tmp, path)          # atomic: ranks may read concurrently
+        return cache
+    except OSError:
+        return None
+
+
+def clean_stale_outputs(workdir="."):
+    """Delete regenerated solver output left by PREVIOUS runs.
+
+    Why this matters beyond tidiness: the field files are resolved by
+    LISTING a directory (see _viz_field_file), and the export directories
+    are pruned by a ring buffer that only tracks what the CURRENT run
+    created. So a directory still holding a longer previous run's pieces or
+    viz_step_* directories is a directory where a later, shorter run can
+    be read alongside stale data. Starting from a clean slate removes that
+    whole class of problem instead of trying to reason about it.
+
+    Only ever removes the tool's own regenerated artifacts - the patterns
+    are exactly what .gitignore already lists as disposable. Never touches
+    the config, the report .txt files, or anything a user authored.
+    Returns the number of entries removed."""
+    removed = 0
+    for pattern in STALE_OUTPUT_GLOBS:
+        for p in glob.glob(os.path.join(workdir, pattern)):
+            try:
+                if os.path.isdir(p) and not os.path.islink(p):
+                    shutil.rmtree(p)
+                else:
+                    os.unlink(p)
+                removed += 1
+            except OSError:
+                pass               # a locked/vanished file is not fatal
+    return removed
+
+
 def worker_main(args):
     """--worker mode: parametric mesh + transient IPCS solve + streaming."""
     from mpi4py import MPI
@@ -2206,6 +2663,26 @@ def worker_main(args):
     comm = MPI.COMM_WORLD
     rank = comm.rank
     t_wall = time.time()
+
+    # Startup hygiene, rank 0 then a barrier so every rank sees the result
+    # before the first form is built (dolfinx caches its JIT options on
+    # first use, so the file has to exist by then) and before any rank
+    # writes output into a directory another rank is still clearing.
+    if rank == 0:
+        n_stale = clean_stale_outputs(".")
+        jit_cache = write_jit_options(".")
+        if n_stale:
+            print(f" [worker] cleared {n_stale} stale output file(s)/dir(s) "
+                  "from a previous run")
+        if jit_cache:
+            fresh = not os.listdir(jit_cache)
+            print(f" [worker] JIT form cache: {jit_cache} "
+                  f"({'cold - forms will compile' if fresh else 'warm'}; "
+                  f"args {' '.join(jit_compile_args()) or 'dolfinx default'})")
+        else:
+            print(" [worker] could not write JIT options - running on "
+                  "dolfinx defaults (ephemeral cache, slower start)")
+    comm.Barrier()
 
     # rank 0 reads (and possibly auto-writes) the config; others receive it
     cfg = comm.bcast(load_config(args["config"]) if rank == 0 else None, root=0)
@@ -2323,6 +2800,13 @@ def worker_main(args):
               f"(lc={lc * 1000:g} mm, ~{n_est:,.0f} elements estimated)")
         print(f" [worker] fan operating estimate: {q_op * M3S_TO_CFM:.1f} CFM "
               f"-> plane velocity {fan_vz:.2f} m/s")
+        if geo.get("drive_mode") == "discrete":
+            mix_desc = ", ".join(f"{n}x {s}"
+                                 for s, n in drive_mix_summary(geo))
+            print(f" [worker] drive array: {geo['n_drives']} of "
+                  f"{geo['n_bays']} bays populated "
+                  f"({mix_desc or 'empty'}); "
+                  f"{geo['n_bays'] - geo['n_drives']} bays open air")
         if two_d:
             print(" [worker] engine=2d: TRUE planar solve on the mid-height "
                   f"x-z slice (y = H/2 = {500.0 * H:g} mm), "
@@ -2386,6 +2870,11 @@ def worker_main(args):
         d = geo["drives"]
         a1 += (mu_c / d[2] + 0.5 * rho_c * d[3] * umag_n) * ufl.dot(u, v) \
             * dx(VOL_DRIVES)
+    for dz in geo.get("drive_boxes") or []:   # discrete drive array: one
+        if two_d and not _midplane_hit(dz["box"], H):   # sink per drive,
+            continue                          # per-class K/C2, own tag
+        a1 += (mu_c / dz["K"] + 0.5 * rho_c * dz["C2"] * umag_n) \
+            * ufl.dot(u, v) * dx(dz["tag"])
     if geo["cpus"]:
         kc, cc = geo["cpus"][0][2], geo["cpus"][0][3]
         a1 += (mu_c / kc + 0.5 * rho_c * cc * umag_n) * ufl.dot(u, v) \
@@ -2898,6 +3387,38 @@ def worker_main(args):
         p_n.x.array[:] = p_n.x.array + phi.x.array
         p_n.x.scatter_forward()
 
+        # --- divergence / solver-failure guard -------------------------
+        # Two things used to pass silently: a blown-up field (no finite
+        # check anywhere) and a linear solve that never converged (PETSc's
+        # converged reason was never read). Either produces a plausible
+        # looking but meaningless run report.
+        #
+        # This also underwrites the optional -ffast-math build: that flag
+        # lets the compiler assume no NaN/Inf, which erodes the very
+        # signal a reader would otherwise use to spot a diverged solve.
+        # Checking explicitly restores it. Cost is an array scan plus one
+        # small allreduce per step - negligible beside three linear solves.
+        bad_reason = next(
+            (nm for nm, ksp in (("tentative velocity", s1),
+                                ("pressure Poisson", s2),
+                                ("velocity correction", s3))
+             if ksp.getConvergedReason() < 0), None)
+        finite = bool(np.isfinite(u_n.x.array).all()
+                      and np.isfinite(p_n.x.array).all())
+        ok = comm.allreduce(1 if (finite and bad_reason is None) else 0,
+                            op=MPI.MIN)
+        if not ok:
+            why = comm.allreduce(bad_reason or ("non-finite field"
+                                                if not finite else ""),
+                                 op=MPI.MAX) or "unknown"
+            if rank == 0:
+                print(f" [worker] SOLVE FAILED at step {step + 1}: {why}. "
+                      "The remaining output would be meaningless, so the "
+                      "run stops here. Try a smaller --dt, a coarser "
+                      "--mesh, or a lower --fan-duty.")
+            send({"type": "error", "step": step + 1, "reason": str(why)})
+            raise SystemExit(f"solver diverged at step {step + 1}: {why}")
+
         if thermal:
             # step 4: energy equation. Mixing plane first: the downstream
             # fan copy rides on the upstream mean of the PREVIOUS step's
@@ -3096,6 +3617,15 @@ def worker_main(args):
             "sim_time": sim_time, "dt": dt,
             "wall_time": time.time() - t_wall,
         }
+        if geo.get("drive_mode") == "discrete":
+            # ADDED summary keys (frozen wire protocol allows additions):
+            # present only for dynamic drive arrays, so every legacy
+            # profile's summary stays byte-identical
+            summary["drive_mode"] = "discrete"
+            summary["n_drive_bays"] = int(geo["n_bays"])
+            summary["n_drives"] = int(geo["n_drives"])
+            summary["drive_mix"] = [{"size": s, "count": n}
+                                    for s, n in drive_mix_summary(geo)]
         if psu_fan_srcs:
             # ADDED summary key (frozen wire protocol allows additions):
             # present only when momentum-source zones actually solved, so
@@ -3383,6 +3913,25 @@ def build_geometry_canvas(geo, nrows, ncols):
         if c1 - c0 > 12:
             cv.stamp_text(r0, c0 + (c1 - c0 - 10) // 2, "[ DRIVES ]",
                           COL_LABEL)
+
+    # Discrete drive array: one dashed cage per POPULATED bay, so an
+    # under-populated front bay visibly reads as open air rather than as a
+    # full-width slab. Labels are whatever build_geometry assigned
+    # ("SSD 1" / "HDD 2"), stamped only where a bay is wide enough to hold
+    # the text - a 24-bay 2.5in front panel is a couple of columns per bay.
+    for _d in geo.get("drive_boxes") or []:
+        b = _d["box"]
+        r0, r1, c0, c1 = xr(b[0]), xr(b[3]), zc(b[2]), zc(b[5])
+        for c in range(c0, c1 + 1):
+            cv.put(r0, c, ".", dash, protect=True)
+            cv.put(r1, c, ".", dash, protect=True)
+        for r in range(r0, r1 + 1):
+            cv.put(r, c0, ":", dash, protect=True)
+            cv.put(r, c1, ":", dash, protect=True)
+        lbl = (geo.get("labels") or {}).get(_d["name"])
+        if lbl and c1 - c0 > len(lbl) + 3:
+            cv.stamp_text(r0, c0 + (c1 - c0 - len(lbl) - 2) // 2,
+                          f"[{lbl}]", COL_LABEL)
 
     for name, b, _k, _c in geo["cpus"]:
         stamp_box(b, name, solid=False)
@@ -3681,6 +4230,10 @@ def build_chassis_iso_panel(speed, geo, vref, max_cols, max_rows,
     blocks = []
     if geo["drives"]:
         blocks.append((geo["drives"][1], "drive_array", False))
+    # discrete array: extrude each populated bay, so the isometric view and
+    # the text report show the same half-empty front bay the mesh solved
+    for _d in geo.get("drive_boxes") or []:
+        blocks.append((_d["box"], _d["name"], False))
     for name, b, _k, _c in geo["cpus"]:
         blocks.append((b, name, False))
     for z in geo["extra_porous"]:
@@ -4204,12 +4757,25 @@ def fan_telemetry_table(fan_cfg, n_fans, summary=None):
 
 
 def dba_thermal_banner(summary):
-    """The homelab verdict: did holding the noise limit cook the box?
+    """The homelab verdict, as TWO independent questions - conflating them
+    was a real bug: a high ceiling that never constrained the fans got
+    blamed for an overheat it did not cause, and the advice ("raise the dBA
+    limit") was useless because the fans were already at full duty.
+
+      1. NOISE  - is the simulated combined dBA within the ceiling?
+                  Pass when simulated <= target. A ceiling above what the
+                  fan wall can even produce is simply not binding, which
+                  is a pass, not a failure.
+      2. THERMAL - does the exhaust exceed requirements.outlet_temp_max_c?
+                  Only attributable to the noise limit when the ceiling
+                  ACTUALLY capped the duty (`dba_target_binding`). If the
+                  fans ran flat out and it still cooks, the limit is
+                  innocent and the remedy is heat load or airflow.
 
     Returns a rich renderable, or None when no acoustic target was set.
-    `dba_exhaust_basis` records whether the exhaust figure came from the
-    solved energy equation ("solved") or the bulk balance ("bulk") - the
-    warning says which, because a bulk estimate cannot see a hot spot."""
+    `dba_exhaust_basis` says whether the exhaust figure is the solved
+    energy equation or the bulk balance, because a bulk estimate cannot
+    see a hot spot."""
     s = summary or {}
     if s.get("dba_target") is None:
         return None
@@ -4217,22 +4783,53 @@ def dba_thermal_banner(summary):
     t_max = s.get("outlet_temp_max_c")
     if t_out is None or t_max is None:
         return None
+    tgt = float(s["dba_target"])
     basis = s.get("dba_exhaust_basis", "bulk")
     basis_txt = ("solved energy equation" if basis == "solved"
                  else "bulk balance - run with the energy equation for a "
                       "hot-spot-aware answer")
-    if s.get("dba_overheat"):
-        return Text(
-            f"[THERMAL WARNING: {float(s['dba_target']):g} dBA noise limit "
-            f"starves the chassis] exhaust {float(t_out):.1f} degC exceeds "
-            f"the {float(t_max):.1f} degC ceiling ({basis_txt}). Raise the "
-            "dBA limit, cut the heat load, or accept throttling.",
+    binding = bool(s.get("dba_target_binding"))
+    combined = s.get("dba_combined")
+    noise_txt = (f"{float(combined):.1f} dBA vs the {tgt:g} dBA ceiling"
+                 if combined is not None else f"{tgt:g} dBA ceiling")
+
+    # --- noise verdict -------------------------------------------------
+    if s.get("dba_target_achievable") is False:
+        head = Text(f"[NOISE: UNREACHABLE] {tgt:g} dBA is below what these "
+                    "fans can produce even at the duty floor - the run used "
+                    "the floor and is louder than requested.",
+                    style="bold red")
+    elif s.get("dba_target_met") is False:
+        head = Text(f"[NOISE: OVER TARGET] {noise_txt}.", style="bold red")
+    elif binding:
+        head = Text(f"[NOISE: OK] {noise_txt} - the ceiling capped fan duty "
+                    f"to {float(s.get('dba_target_duty_cap', 1.0)) * 100:.0f}"
+                    " % of rated.", style="green")
+    else:
+        head = Text(f"[NOISE: OK] {noise_txt} - not a binding constraint, "
+                    "the fans never needed to slow down.", style="green")
+
+    # --- thermal verdict, attributed honestly --------------------------
+    if not s.get("dba_overheat"):
+        body = Text(f"  Thermal: exhaust {float(t_out):.1f} degC is within "
+                    f"the {float(t_max):.1f} degC ceiling ({basis_txt}).",
+                    style="green")
+    elif binding:
+        body = Text(
+            f"  [THERMAL WARNING] holding {tgt:g} dBA starves the chassis: "
+            f"exhaust {float(t_out):.1f} degC exceeds the "
+            f"{float(t_max):.1f} degC ceiling ({basis_txt}). Raise the dBA "
+            "limit, cut the heat load, or accept throttling.",
             style="bold red")
-    return Text(
-        f"noise limit {float(s['dba_target']):g} dBA holds without "
-        f"overheating: exhaust {float(t_out):.1f} degC vs the "
-        f"{float(t_max):.1f} degC ceiling ({basis_txt})",
-        style="green")
+    else:
+        body = Text(
+            f"  [THERMAL WARNING] exhaust {float(t_out):.1f} degC exceeds "
+            f"the {float(t_max):.1f} degC ceiling ({basis_txt}) with the "
+            "fans at FULL duty - the noise ceiling is not the cause and "
+            "raising it will not help. Cut the heat load, fit stronger "
+            "fans, or accept throttling.",
+            style="bold red")
+    return Group(head, body)
 
 
 def write_report(server_cfg, params, fan_cfg, summary, comp_rows, fails,
@@ -4354,7 +4951,7 @@ def launcher_wizard(console, cfg, config_path):
     console.clear()
     render_banner(console)
     console.print(Panel.fit(
-        "[bold cyan]ASCIISTREAM[/]  [dim]v0.9.1 - terminal CFD for server "
+        "[bold cyan]ASCIISTREAM[/]  [dim]v0.9.2 - terminal CFD for server "
         "chassis[/]\n"
         "[white]Transient Navier-Stokes (incremental pressure-correction) on "
         "MPI workers[/]\n"
@@ -4421,18 +5018,53 @@ def launcher_wizard(console, cfg, config_path):
         # (the C4130 is usually ordered that way), and the geometry layer
         # has always supported drive_bay_count = 0 - only this prompt
         # blocked it.
-        dsel = Prompt.ask("  Drive type  [0] No drives  "
-                          "[1] 2.5in NVMe/SAS  [2] 3.5in HDD",
-                          choices=["0", "1", "2"],
-                          default="2" if "3.5" in str(s.get("drive_bay_type")
-                                                      or "") else "1",
-                          console=console)
-        if dsel == "0":
+        # Dynamic drive array: exact quantity, and the 2.5in/3.5in mix.
+        # Unpopulated bays become OPEN AIR in the solved domain (not a
+        # full-width porous slab), which measurably changes the flow - an
+        # empty 8-bay 6029U front passes 96.4 CFM against 79.3 CFM fully
+        # loaded. Answering 0 removes the cage entirely.
+        n_bays = int(s.get("drive_bay_count", 0))
+        bay_cls = str(s.get("drive_bay_size")
+                      or s.get("drive_bay_type") or "2.5")
+        console.print(f"\n  [bold]Drive bays[/] - this chassis has "
+                      f"[cyan]{n_bays}[/] {bay_cls} bays. Empty bays are "
+                      "modelled as open airflow.")
+        n_drv = IntPrompt.ask(f"  How many drives are installed? "
+                              f"[0 to {n_bays}]", default=n_bays,
+                              console=console)
+        n_drv = max(0, min(int(n_drv), n_bays))
+        if n_drv == 0:
             hw["drive_bay_count"] = 0
-            console.print("    [dim]drive cage removed - the front bay "
-                          "becomes open intake air[/]")
+            console.print("    [dim]no drives - the front bay becomes open "
+                          "intake air[/]")
         else:
-            hw["drive_type"] = ("2.5in NVMe/SAS", "3.5in HDD")[int(dsel) - 1]
+            n_35 = IntPrompt.ask(
+                f"    How many of those {n_drv} are 3.5in HDDs? "
+                "(the rest are 2.5in NVMe/SAS)",
+                default=n_drv if "3.5" in bay_cls else 0, console=console)
+            n_35 = max(0, min(int(n_35), n_drv))
+            mix = [e for e in ({"count": n_drv - n_35, "size": "2.5"},
+                               {"count": n_35, "size": "3.5"})
+                   if e["count"] > 0]
+            # A 3.5in drive cannot physically stand in a 1U bay, and a mix
+            # can outgrow the bay grid - build_geometry raises for those.
+            # Try it here so the user is told at the prompt instead of
+            # watching the solver abort minutes later.
+            probe = json.loads(json.dumps(s))
+            probe["drive_array"] = mix
+            try:
+                build_geometry(probe)
+                hw["drive_mix"] = mix
+                console.print(
+                    "    [dim]"
+                    + ", ".join(f"{e['count']}x {e['size']}in" for e in mix)
+                    + f"; {n_bays - n_drv} bay(s) open air[/]")
+            except (ValueError, KeyError) as exc:
+                console.print(f"    [yellow]that mix does not fit this "
+                              f"chassis ({exc}) - falling back to a uniform "
+                              "cage[/]")
+                hw["drive_type"] = ("3.5in HDD" if n_35 > n_drv // 2
+                                    else "2.5in NVMe/SAS")
     hw["heat_load_w"] = FloatPrompt.ask(
         "  Total system wattage [W of heat load]",
         default=float(s["heat_load"]), console=console)
@@ -4725,6 +5357,52 @@ def launcher_wizard(console, cfg, config_path):
             "thermal": thermal, "dba_target": dba_target}
 
 
+def reap_worker_pool(proc, console=None, term_timeout=10.0,
+                     kill_timeout=5.0):
+    """Terminate the mpiexec worker pool and ACTUALLY reap it.
+
+    `proc.terminate()` alone leaves a zombie until the launcher itself
+    exits: the child is dead but its exit status is never collected. One
+    teardown path did exactly that - the "worker never connected" timeout
+    terminated and returned without waiting - so a run that timed out left
+    the pool behind. Both paths now come through here.
+
+    Escalates rather than trusting SIGTERM: mpiexec forwards the signal to
+    its ranks, but a rank wedged inside a PETSc solve or an MPI collective
+    can ignore it, and a bare `wait()` would then block the launcher
+    forever. SIGTERM, wait, then SIGKILL, then wait again. Returns the
+    exit status, or None if even SIGKILL did not land (should not happen;
+    reported rather than hidden).
+
+    Safe to call twice - a already-reaped process just returns its status.
+    """
+    if proc is None:
+        return None
+    if proc.poll() is not None:
+        return proc.returncode
+    try:
+        proc.terminate()
+    except OSError:
+        pass
+    try:
+        return proc.wait(timeout=term_timeout)
+    except subprocess.TimeoutExpired:
+        pass
+    if console is not None:
+        console.print(" [yellow]worker pool ignored SIGTERM - killing[/]")
+    try:
+        proc.kill()
+    except OSError:
+        pass
+    try:
+        return proc.wait(timeout=kill_timeout)
+    except subprocess.TimeoutExpired:
+        if console is not None:
+            console.print(" [red]worker pool survived SIGKILL; it may be "
+                          "stuck in an uninterruptible MPI call[/]")
+        return None
+
+
 def detect_mpi_flags():
     """Launch flags for the worker pool, keyed off `mpiexec --version`.
 
@@ -4831,7 +5509,9 @@ def launcher_main(config_path):
     try:
         conn, _ = srv.accept()
     except socket.timeout:
-        proc.terminate()
+        # reap, do not just signal: this path used to terminate() and
+        # return, leaving the pool as a zombie for the launcher's lifetime
+        reap_worker_pool(proc, console)
         console.print("[red]worker never connected; last output:[/]")
         console.print("".join(list(out_tail)[-10:] + list(err_tail)[-10:]))
         return
@@ -5006,13 +5686,20 @@ def launcher_main(config_path):
                     time.sleep(1.0 / ANIM_FPS)
     except KeyboardInterrupt:
         console.print("\n [yellow]dashboard stopped - terminating worker[/]")
-        proc.terminate()
+        reap_worker_pool(proc, console)
     finally:
         keys_stop.set()
         if key_thr is not None:
             key_thr.join(timeout=1.0)
 
-    proc.wait(timeout=60)
+    # normal completion: the pool should already be exiting on its own, so
+    # give it a moment before escalating. reap_worker_pool is idempotent,
+    # so the Ctrl+C path above having already reaped is fine.
+    if proc.poll() is None:
+        try:
+            proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            reap_worker_pool(proc, console)
     if state["summary"]:
         summary = state["summary"]
         fan_cfg = params["fan_custom"] or cfg["fans"][params["fan"]]

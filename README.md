@@ -6,7 +6,7 @@ The goal of this infrastructure isn't just to tinker—it's built to replicate a
 
 ---
 
-## 🚀 Featured Project: ASCIISTREAM (Terminal CFD) v0.9.1
+## 🚀 Featured Project: ASCIISTREAM (Terminal CFD) v0.9.2
 
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white) ![CFD FEniCS dolfinx](https://img.shields.io/badge/CFD-FEniCS%20dolfinx-red?style=flat-square) ![MPI Multi-Core](https://img.shields.io/badge/MPI-Multi--Core-green?style=flat-square) ![TUI Rich](https://img.shields.io/badge/TUI-Rich-purple?style=flat-square) ![3D PyVista + Qt](https://img.shields.io/badge/3D-PyVista%20%2B%20Qt-orange?style=flat-square) ![Thermal Energy Equation](https://img.shields.io/badge/Thermal-Energy%20Equation-critical?style=flat-square) ![Arch x86_64 | ARM64](https://img.shields.io/badge/Arch-x86__64%20%7C%20ARM64-blue?style=flat-square)
 
