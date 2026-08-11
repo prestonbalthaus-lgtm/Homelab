@@ -63,19 +63,47 @@ def main(argv=None):
               file=sys.stderr)
         return 1
     vec = (fields.get("velocity") or {}).get("array", "velocity")
-    if velocity_magnitude(flow, vec) is None:
+    mag = velocity_magnitude(flow, vec)
+    if mag is None:
         print(f"velocity dataset carries no '{vec}' array", file=sys.stderr)
         return 1
+    vmax = float(np.nanmax(mag)) if mag.size else 0.0
+    if not np.isfinite(vmax) or vmax <= 0.0:
+        vmax = 1.0
+    clim = [0.0, vmax]
+    diag = flow.length or 1.0          # bounding-box diagonal [m]
+    flat = (flow.bounds[5] - flow.bounds[4]) < 1e-9   # 2d planar export
 
     plotter = pv.Plotter(off_screen=True, window_size=[1920, 1080])
     plotter.set_background("#101014")
 
-    print("velocity glyphs over the flow domain...")
-    # tolerance thins the glyph seed points so fine meshes stay tractable
-    glyphs = flow.glyph(orient=vec, scale=vec, factor=0.02, tolerance=0.01)
-    plotter.add_mesh(glyphs, scalars="GlyphScale", cmap="jet",
+    # dense field: speed lives in COLOUR, the convention the pop-out
+    # viewer and the TUI colormap already use (a 3-D volume is drawn
+    # translucent so the hardware inside stays visible)
+    print(f"flow field coloured by |u| (0..{vmax:.2f} m/s)...")
+    plotter.add_mesh(flow, scalars="|u|", cmap="jet", clim=clim,
+                     opacity=1.0 if flat else 0.35,
                      scalar_bar_args={"title": "|u| [m/s]", "color": "white"})
     plotter.add_mesh(flow.outline(), color="#c8c8d0")
+
+    # direction arrows, sized from data + geometry: scale by |u| with
+    # factor GLYPH_FRAC*diag/vmax, so the longest arrow is always
+    # GLYPH_FRAC of the chassis diagonal - legible at any |u| range by
+    # construction. tolerance thins the seed points on fine meshes.
+    try:
+        seeds = flow.threshold(GLYPH_MIN_FRAC * vmax, scalars="|u|")
+        glyphs = seeds.glyph(orient=vec, scale="|u|",
+                             factor=GLYPH_FRAC * diag / vmax,
+                             tolerance=0.02)
+        if flat:                       # lift arrows off the coplanar
+            glyphs = glyphs.translate((0.0, 0.0, 1e-3 * diag))   # surface
+        scal = "|u|" if "|u|" in glyphs.point_data else None
+        plotter.add_mesh(glyphs, scalars=scal, cmap="jet", clim=clim,
+                         show_scalar_bar=False)
+        print(f"direction arrows: longest = {GLYPH_FRAC * diag:.3f} m "
+              f"({GLYPH_FRAC:.0%} of the {diag:.2f} m chassis diagonal)")
+    except Exception as exc:           # colour-only render still stands
+        print(f"direction arrows skipped ({exc})", file=sys.stderr)
 
     zones = load_field_mesh(args.dir, fields, "zones")
     if zones is not None:
@@ -85,6 +113,9 @@ def main(argv=None):
             if hardware.n_cells:
                 print("chassis hardware from the zone tags "
                       f"({hardware.n_cells} cells)...")
+                if flat:               # same lift: the 2d zones patches
+                    hardware = hardware.translate(   # are coplanar with
+                        (0.0, 0.0, 2e-3 * diag))     # the flow surface
                 plotter.add_mesh(hardware, color="#9a9aa4", opacity=0.9)
 
     plotter.add_text(
@@ -92,7 +123,10 @@ def main(argv=None):
         f"t={man.get('t', 0.0):.2f}s  step {man.get('step', '?')}"
         f"/{man.get('steps', '?')}  engine={man.get('engine', '?')}",
         position="upper_left", font_size=10, color="white")
-    plotter.view_isometric()
+    if flat:
+        plotter.view_xy()              # planar slice: face-on, no skew
+    else:
+        plotter.view_isometric()
     print(f"rendering {args.out} ...")
     plotter.screenshot(args.out)
     print(f"done - open {args.out} to view the snapshot")
