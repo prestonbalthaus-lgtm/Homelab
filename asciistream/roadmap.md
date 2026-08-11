@@ -48,13 +48,15 @@ This document outlines the planned development phases, upcoming features, and ar
 *   [ ] **Thermal Heat Transfer:** Introduce energy equations to model air temperature deltas across CPU and GPU blocks based on user-defined system wattage.
 *   [~] **Acoustic Estimation:** dB now scales with the *chosen* fan duty via the affinity law (dBA ~ dBA_rated + 50·log₁₀(N/N_rated)), combined across fans as +10·log₁₀(N_fans), and is shown in the acoustics/power table. Still open: solving for the RPM actually *required* to meet a thermal target, rather than the user picking a duty.
 *   [ ] **Automated Chassis Scanning:** Allow users to define a custom chassis name and append a blank template to `server_configs.json` dynamically from the TUI.
+*   [ ] **3D server Meshes** Work on implementing importation of .STEP or .IGES files from vendors or 3rd parties for higher fidelity and better accuracy of the models when being tested.
+
 
 ---
 
 ## 📋 The Backlog / Brain dump
 *Use this section to drop unorganized ideas, UI tweaks, or future hardware support notes.*
 
-*   *(Obsolete)* ~~Add an explicit `--fallback` flag for terminal emulators that reject Sixel sequences.~~ — no sixel pipeline to fall back from any more.
 *   *(Idea)* Auto-calibrate the 2-D planar engine against a 3-D reference run per profile, so the fast engine can report a corrected through-flow instead of a known over-prediction.
 *   *(Idea)* `.glb`/Draco hardware-boundary overlay is implemented in the viewer but ships **unexercised** — no asset exists in the repo to load. Needs a real exported chassis mesh to validate against.
-*   *(Idea)* Extract the 2-D/3-D sampling grid contract into a documented schema; the launcher wire protocol is currently frozen by convention rather than by a test.
+*   *(Idea)* Try and implement things like testing more than 1 chassis/rack size compute. Will possibly require lots of code tweaks and will be harder to test due to the nature of a massive increase in cells that will need heaps of RAM to model in a timely manner.
+*   *(Idea)* Work on implementing air shrouds that are almost always present in enterprise servers 
