@@ -59,4 +59,5 @@ This document outlines the planned development phases, upcoming features, and ar
 *   *(Idea)* Auto-calibrate the 2-D planar engine against a 3-D reference run per profile, so the fast engine can report a corrected through-flow instead of a known over-prediction.
 *   *(Idea)* `.glb`/Draco hardware-boundary overlay is implemented in the viewer but ships **unexercised** — no asset exists in the repo to load. Needs a real exported chassis mesh to validate against.
 *   *(Idea)* Try and implement things like testing more than 1 chassis/rack size compute. Will possibly require lots of code tweaks and will be harder to test due to the nature of a massive increase in cells that will need heaps of RAM to model in a timely manner.
-*   *(Idea)* Work on implementing air shrouds that are almost always present in enterprise servers 
+*   *(Idea)* Work on implementing air shrouds that are almost always present in enterprise servers
+*   *(Bug fix)* ./setup_host_viewer.sh requires a brew command, which the user should not be forced to install homebrew on linux if they dont want to. Will have to check and make sure that it is viable to not force the user to use homebrew
